@@ -1,0 +1,190 @@
+{% extends "layouts/app.html" %}
+{% load static %}
+{% block page_title %}
+  {% if user.is_head %}Institute overview{% elif user.is_hod %}{{ user.department.name|default:"Department" }} overview{% else %}My classes{% endif %}
+{% endblock %}
+{% block page_sub %}Live attendance analytics · default range 1 Jan – today{% endblock %}
+{% block topbar_actions %}
+{% if user.is_teacher %}<a href="{% url 'attendance:generate' %}" class="btn btn-primary btn-sm">
+  <i class="fa-solid fa-satellite-dish me-1"></i>Take attendance</a>{% endif %}
+<a href="{% url 'dashboard:reports' %}" class="btn btn-light btn-sm"><i class="fa-solid fa-chart-column me-1"></i>Full reports</a>
+{% endblock %}
+
+{% block content %}
+{% include "partials/filters.html" %}
+
+<!-- KPIs -->
+<div class="row g-3 mb-3" id="kpis">
+  <div class="col-6 col-lg-3"><div class="card ga-kpi"><div class="card-body d-flex gap-3 align-items-center">
+    <div class="icon bg-grad-1"><i class="fa-solid fa-percent"></i></div>
+    <div><div class="value" id="kpi-overall">—</div><div class="label">Overall attendance</div></div></div></div></div>
+  <div class="col-6 col-lg-3"><div class="card ga-kpi"><div class="card-body d-flex gap-3 align-items-center">
+    <div class="icon bg-grad-2"><i class="fa-solid fa-chalkboard"></i></div>
+    <div><div class="value" id="kpi-classes">—</div><div class="label">Classes conducted</div></div></div></div></div>
+  <div class="col-6 col-lg-3"><div class="card ga-kpi"><div class="card-body d-flex gap-3 align-items-center">
+    <div class="icon bg-grad-3"><i class="fa-solid fa-user-graduate"></i></div>
+    <div><div class="value" id="kpi-students">—</div><div class="label">Students in scope</div></div></div></div></div>
+  <div class="col-6 col-lg-3"><div class="card ga-kpi"><div class="card-body d-flex gap-3 align-items-center">
+    <div class="icon bg-grad-5"><i class="fa-solid fa-triangle-exclamation"></i></div>
+    <div><div class="value" id="kpi-risk">—</div><div class="label">Below {{ threshold }}%</div></div></div></div></div>
+</div>
+
+<div class="row g-3 mb-3">
+  <div class="col-lg-8"><div class="card h-100">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      <span><i class="fa-solid fa-chart-line me-2 text-primary"></i>Daily attendance trend</span>
+      <small class="text-muted-2" id="trend-note"></small>
+    </div>
+    <div class="card-body"><div style="height:280px"><canvas id="chart-trend"></canvas></div></div>
+  </div></div>
+  <div class="col-lg-4"><div class="card h-100">
+    <div class="card-header"><i class="fa-solid fa-chart-pie me-2 text-primary"></i>Attendance bands</div>
+    <div class="card-body"><div style="height:280px"><canvas id="chart-bands"></canvas></div></div>
+  </div></div>
+</div>
+
+<div class="row g-3 mb-3">
+  {% if user.is_head %}
+  <div class="col-lg-6"><div class="card h-100">
+    <div class="card-header"><i class="fa-solid fa-building-columns me-2 text-primary"></i>Department comparison</div>
+    <div class="card-body"><div style="height:260px"><canvas id="chart-dept"></canvas></div></div>
+  </div></div>
+  {% endif %}
+  <div class="col-lg-6"><div class="card h-100">
+    <div class="card-header"><i class="fa-solid fa-layer-group me-2 text-primary"></i>Batch comparison</div>
+    <div class="card-body"><div style="height:260px"><canvas id="chart-batch"></canvas></div></div>
+  </div></div>
+  {% if not user.is_head %}
+  <div class="col-lg-6"><div class="card h-100">
+    <div class="card-header"><i class="fa-solid fa-clock me-2 text-primary"></i>Classes by hour of day</div>
+    <div class="card-body"><div style="height:260px"><canvas id="chart-hours"></canvas></div></div>
+  </div></div>
+  {% endif %}
+</div>
+
+<div class="row g-3">
+  <div class="col-lg-7"><div class="card h-100">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      <span><i class="fa-solid fa-book me-2 text-primary"></i>Subject-wise summary</span>
+      <a class="btn btn-light btn-sm" id="exp-sub"><i class="fa-solid fa-file-csv"></i></a>
+    </div>
+    <div class="card-body"><div id="tbl-subjects"></div></div>
+  </div></div>
+  <div class="col-lg-5"><div class="card h-100">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      <span><i class="fa-solid fa-triangle-exclamation me-2 text-danger"></i>Students below {{ threshold }}%</span>
+      <span class="d-flex gap-2">
+        <a class="btn btn-soft btn-sm" href="{% url 'notifications:alerts' %}"
+           title="Send alerts to these students"><i class="fa-solid fa-bell me-1"></i>Alert</a>
+        <a class="btn btn-light btn-sm" id="exp-stu"><i class="fa-solid fa-file-csv"></i></a>
+      </span>
+    </div>
+    <div class="card-body"><div id="tbl-low"></div></div>
+  </div></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{% static 'js/reports.js' %}"></script>
+<script>
+$(function(){
+  const isHead = {{ user.is_head|yesno:"true,false" }};
+
+  const KPIS = "#kpi-overall, #kpi-classes, #kpi-students, #kpi-risk";
+
+  function loadAll(){
+    const f = GA.filters();
+    // Every request goes into `jobs` so loadAll() can return one promise that
+    // settles when the *last* panel lands. Without this the Apply button stops
+    // spinning as soon as the quickest endpoint replies, while half the page
+    // is still loading.
+    const jobs = [];
+    // Charts and tables clear their own loading state when they render; the
+    // KPI numbers are plain .text() writes, so they call GA.done() themselves.
+    GA.loading(KPIS);
+    GA.loading("#chart-trend, #chart-bands, #chart-hours, #chart-batch, #chart-dept");
+    GA.loading("#tbl-subjects, #tbl-low", {rows:8, cols:6});
+
+    jobs.push(GA.get("{% url 'dashboard:api_summary' %}", f, {quiet:true}).done(function(res){
+      const k = res.data.kpis;
+      $("#kpi-overall").text(k.overall_percentage.toFixed(1)+"%");
+      $("#kpi-classes").text(k.classes_conducted);
+      $("#kpi-students").text(k.students);
+      $("#kpi-risk").text(k.below_threshold);
+    }).always(function(){ GA.done(KPIS); }));
+
+    jobs.push(GA.get("{% url 'dashboard:api_trend' %}", f, {quiet:true}).done(function(res){
+      const d = res.data;
+      $("#trend-note").text(d.labels.length + " teaching days");
+      GA.chart("chart-trend","line",{ labels:d.labels, datasets:[
+        { label:"Attendance %", data:d.percentage, borderColor:"#4f46e5", backgroundColor:"rgba(79,70,229,.12)",
+          fill:true, tension:.35, pointRadius:2, borderWidth:2, yAxisID:"y" },
+        { label:"Classes", data:d.classes, type:"bar", backgroundColor:"rgba(6,182,212,.35)",
+          borderRadius:4, yAxisID:"y1", barThickness:10 }
+      ]}, { plugins:{legend:{display:true}}, scales:{
+        y:{ beginAtZero:true, max:100, title:{display:true,text:"%",font:{size:10}} },
+        y1:{ position:"right", beginAtZero:true, grid:{display:false} } }});
+    }));
+
+    jobs.push(GA.get("{% url 'dashboard:api_distribution' %}", f, {quiet:true}).done(function(res){
+      const b = res.data.bands;
+      GA.chart("chart-bands","doughnut",{ labels:b.labels, datasets:[{ data:b.values,
+        backgroundColor:["#ef4444","#f97316","#f59e0b","#3b82f6","#10b981"], borderWidth:0 }]},
+        { cutout:"62%", plugins:{legend:{display:true, position:"bottom"}} });
+      if(!isHead){
+        const h = res.data.hours;
+        GA.chart("chart-hours","bar",{ labels:h.labels, datasets:[{ label:"Classes", data:h.values,
+          backgroundColor:"#06b6d4", borderRadius:5 }]});
+      }
+    }));
+
+    jobs.push(GA.get("{% url 'dashboard:api_batches_report' %}", f, {quiet:true}).done(function(res){
+      const r = res.data.rows;
+      GA.chart("chart-batch","bar",{ labels:r.map(x=>x.label), datasets:[{ label:"Attendance %",
+        data:r.map(x=>x.percentage), backgroundColor:"#4f46e5", borderRadius:6, barThickness:26 }]},
+        { indexAxis:"y", scales:{ x:{ max:100 } } });
+    }));
+
+    if(isHead){
+      jobs.push(GA.get("{% url 'dashboard:api_departments_report' %}", f, {quiet:true}).done(function(res){
+        const r = res.data.rows;
+        GA.chart("chart-dept","bar",{ labels:r.map(x=>x.label), datasets:[{ label:"Attendance %",
+          data:r.map(x=>x.percentage), backgroundColor:"#10b981", borderRadius:6, barThickness:26 }]},
+          { indexAxis:"y", scales:{ x:{ max:100 } } });
+      }));
+    }
+
+    jobs.push(GA.get("{% url 'dashboard:api_subjects_report' %}", f, {quiet:true}).done(function(res){
+      GA.table("#tbl-subjects", { perPage:8, rows:res.data.rows, empty:"No classes conducted in this range.", columns:[
+        { key:"code", label:"Code", render:v=>'<span class="ga-pill pill-violet">'+GA.esc(v)+'</span>' },
+        { key:"name", label:"Subject", render:v=>'<span class="fw-600">'+GA.esc(v)+'</span>' },
+        { key:"batch", label:"Batch" },
+        { key:"classes", label:"Classes", className:"text-center" },
+        { key:"enrolled", label:"Enrolled", className:"text-center" },
+        { key:"avg_present", label:"Avg present", className:"text-center" },
+        { key:"percentage", label:"Attendance", width:"160px", render:v=>GA.bar(v) }
+      ]});
+    }));
+
+    jobs.push(GA.get("{% url 'dashboard:api_low_attendance' %}", $.extend({threshold:{{ threshold }}}, f), {quiet:true})
+      .done(function(res){
+        GA.table("#tbl-low", { perPage:8, rows:res.data.rows, empty:"Nobody is below the threshold. 🎉", columns:[
+          { key:"name", label:"Student", render:(v,r)=>'<div class="d-flex align-items-center gap-2">'+GA.avatar(v)+
+            '<div><div class="fw-600">'+GA.esc(v)+'</div><small class="text-muted-2">'+GA.esc(r.batch)+' · '+GA.esc(r.roll||r.email)+'</small></div></div>' },
+          { key:"attended", label:"Att / Held", className:"text-center", render:(v,r)=> v+" / "+r.held },
+          { key:"percentage", label:"%", render:v=>GA.pctPill(v) },
+          { key:"student_id", label:"", sortable:false, className:"text-end", render:v=>
+            '<a href="/app/students/'+v+'/" class="btn btn-light btn-sm"><i class="fa-solid fa-chevron-right"></i></a>' }
+        ]});
+      }));
+
+    $("#exp-sub").attr("href", "{% url 'dashboard:export_subjects' %}?"+$.param(f));
+    $("#exp-stu").attr("href", "{% url 'dashboard:export_students' %}?"+$.param(f));
+    return $.when.apply($, jobs);
+  }
+
+  GA.initFilters(loadAll);
+  loadAll();
+});
+</script>
+{% endblock %}

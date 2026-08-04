@@ -1,0 +1,82 @@
+{% extends "layouts/app.html" %}
+{% block page_title %}Class sessions{% endblock %}
+{% block page_sub %}Every attendance request generated, with live and historical results.{% endblock %}
+{% block topbar_actions %}
+{% if user.is_teacher %}<a href="{% url 'attendance:generate' %}" class="btn btn-primary btn-sm">
+  <i class="fa-solid fa-satellite-dish me-1"></i>Take attendance</a>{% endif %}
+{% endblock %}
+
+{% block content %}
+<div class="card mb-3"><div class="card-body py-3">
+  <div class="row g-2 align-items-end">
+    <div class="col-6 col-md-2"><label class="form-label mb-1">From</label>
+      <input type="date" class="form-control form-control-sm" id="f-start" value="{{ default_start }}"></div>
+    <div class="col-6 col-md-2"><label class="form-label mb-1">To</label>
+      <input type="date" class="form-control form-control-sm" id="f-end" value="{{ default_end }}"></div>
+    <div class="col-6 col-md-2"><label class="form-label mb-1">Batch</label>
+      <select class="form-select form-select-sm" id="f-batch"><option value="">All</option></select></div>
+    <div class="col-6 col-md-3"><label class="form-label mb-1">Subject</label>
+      <select class="form-select form-select-sm" id="f-subject"><option value="">All</option></select></div>
+    <div class="col-6 col-md-2"><label class="form-label mb-1">Status</label>
+      <select class="form-select form-select-sm" id="f-status">
+        <option value="">All</option><option value="OPEN">Open now</option></select></div>
+    <div class="col-6 col-md-1 d-grid"><button class="btn btn-primary btn-sm" id="btn-apply">
+      <i class="fa-solid fa-filter"></i></button></div>
+  </div>
+</div></div>
+
+<div class="card"><div class="card-body">
+  <div class="d-flex justify-content-between align-items-center mb-2">
+    <div class="input-group input-group-sm" style="max-width:280px">
+      <span class="input-group-text"><i class="fa-solid fa-magnifying-glass"></i></span>
+      <input class="form-control" id="search" placeholder="Search…">
+    </div>
+    <span class="ga-pill pill-blue" id="count-pill">0 sessions</span>
+  </div>
+  <div id="tbl"></div>
+</div></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+$(function(){
+  let table=null;
+  const cols = [
+    { key:"date", label:"Date" },
+    { key:"time", label:"Time" },
+    { key:"subject", label:"Subject", render:(v,r)=>
+      '<div><span class="ga-pill pill-violet">'+GA.esc(v)+'</span> <span class="fw-600">'+GA.esc(r.subject_name)+'</span></div>' },
+    { key:"batch", label:"Batch" },
+    { key:"teacher", label:"Teacher" },
+    { key:"expected", label:"Enrolled", className:"text-center" },
+    { key:"present", label:"Present", className:"text-center",
+      render:v=>'<span class="fw-600 text-success">'+v+'</span>' },
+    { key:"percentage", label:"Attendance", width:"170px", render:v=>GA.bar(v) },
+    { key:"status", label:"Status", render:v=>GA.statusPill(v) },
+    { key:"url", label:"", sortable:false, className:"text-end",
+      render:v=>'<a href="'+v+'" class="btn btn-light btn-sm"><i class="fa-solid fa-chevron-right"></i></a>' }
+  ];
+  function load(){
+    GA.loading("#tbl", {rows:10, cols:6});
+    return GA.get("{% url 'attendance:api_sessions' %}", GA.query({
+      start:$("#f-start").val(), end:$("#f-end").val(), batch:$("#f-batch").val(),
+      subject:$("#f-subject").val(), status:$("#f-status").val()
+    })).done(function(res){
+      const rows = res.data.rows;
+      $("#count-pill").text(rows.length+" sessions");
+      if(!table) table = GA.table("#tbl", { csvName:"class-sessions",columns:cols, rows:rows, search:"#search", perPage:20,
+        empty:"No attendance sessions in this range.",
+        onRowClick:(r)=> window.location = r.url});
+      else table.setRows(rows);
+    });
+  }
+  $("#btn-apply").on("click", function(){ GA.spin(this, load()); });
+  $("#f-status, #f-batch, #f-subject").on("change", load);
+  GA.get("{% url 'academics:api_lookups' %}").done(function(res){
+    $("#f-batch").append(res.data.batches.map(b=>'<option value="'+b.id+'">'+GA.esc(b.label)+'</option>').join(""));
+    $("#f-subject").append(res.data.subjects.map(s=>'<option value="'+s.id+'">'+GA.esc(s.code)+' — '+GA.esc(s.name)+'</option>').join(""));
+    load();
+  });
+});
+</script>
+{% endblock %}

@@ -1,0 +1,12 @@
+Your device has been unlinked
+
+Hi {{ user.short_name }}, the device registered to your {{ SITE_NAME }} account has been
+released{% if not self_service %} by {{ actor.get_full_name }} ({{ actor.get_role_display }}){% endif %}.
+{% if reason %}Reason given: {{ reason }}
+{% endif %}
+The next device you mark attendance from will become your registered device.
+
+Didn't expect this? Contact your department office straight away — someone may be
+trying to mark attendance on your behalf.
+
+{{ login_url }}

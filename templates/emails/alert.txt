@@ -1,0 +1,4 @@
+{{ body }}
+
+--
+{{ SITE_NAME }} · view your attendance at {{ login_url }}

@@ -1,0 +1,71 @@
+{% url 'dashboard:home' as u_home %}
+<a href="{{ u_home }}" class="{% if request.path == u_home %}active{% endif %}">
+  <i class="fa-solid fa-gauge-high"></i> Dashboard
+</a>
+
+{% if user.is_head %}
+  <div class="nav-label">Institute</div>
+  <a href="{% url 'academics:departments' %}" class="{% if '/manage/departments' in request.path %}active{% endif %}">
+    <i class="fa-solid fa-building-columns"></i> Departments &amp; HoDs</a>
+  <a href="{% url 'academics:subjects' %}" class="{% if '/manage/subjects' in request.path %}active{% endif %}">
+    <i class="fa-solid fa-book"></i> Subjects</a>
+  <a href="{% url 'academics:batches' %}" class="{% if '/manage/batches' in request.path %}active{% endif %}">
+    <i class="fa-solid fa-layer-group"></i> Batches</a>
+  <a href="{% url 'academics:teachers' %}" class="{% if '/manage/teachers' in request.path %}active{% endif %}">
+    <i class="fa-solid fa-chalkboard-user"></i> Teachers</a>
+  <a href="{% url 'academics:students' %}" class="{% if '/manage/students' in request.path %}active{% endif %}">
+    <i class="fa-solid fa-user-graduate"></i> Students</a>
+  <a href="{% url 'notifications:templates' %}" class="{% if '/alerts/templates' in request.path %}active{% endif %}">
+    <i class="fa-brands fa-whatsapp"></i> WhatsApp templates</a>
+{% endif %}
+
+{% if user.is_hod %}
+  <div class="nav-label">My department</div>
+  <a href="{% url 'academics:subjects' %}" class="{% if '/manage/subjects' in request.path %}active{% endif %}">
+    <i class="fa-solid fa-book"></i> Subjects</a>
+  <a href="{% url 'academics:batches' %}" class="{% if '/manage/batches' in request.path %}active{% endif %}">
+    <i class="fa-solid fa-layer-group"></i> Batches</a>
+  <a href="{% url 'academics:teachers' %}" class="{% if '/manage/teachers' in request.path %}active{% endif %}">
+    <i class="fa-solid fa-chalkboard-user"></i> Teachers</a>
+  <a href="{% url 'academics:students' %}" class="{% if '/manage/students' in request.path %}active{% endif %}">
+    <i class="fa-solid fa-user-graduate"></i> Students &amp; import</a>
+{% endif %}
+
+{% if user.is_teacher %}
+  <div class="nav-label">Class</div>
+  <a href="{% url 'attendance:generate' %}" class="{% if '/attendance/generate' in request.path %}active{% endif %}">
+    <i class="fa-solid fa-satellite-dish"></i> Take attendance</a>
+  <a href="{% url 'academics:students' %}" class="{% if '/manage/students' in request.path %}active{% endif %}">
+    <i class="fa-solid fa-user-graduate"></i> My students</a>
+  <a href="{% url 'academics:all_students' %}" class="{% if '/manage/all-students' in request.path %}active{% endif %}">
+    <i class="fa-solid fa-users"></i> Students</a>
+  <a href="{% url 'academics:teachers' %}" class="{% if '/manage/teachers' in request.path %}active{% endif %}">
+    <i class="fa-solid fa-chalkboard-user"></i> Teachers</a>
+{% endif %}
+
+{% if user.is_student %}
+  <div class="nav-label">Me</div>
+  <a href="{% url 'attendance:my_attendance' %}" class="{% if '/attendance/me' in request.path %}active{% endif %}">
+    <i class="fa-solid fa-calendar-check"></i> My attendance</a>
+  <a href="{% url 'attendance:my_absence_reasons' %}" class="{% if '/attendance/my-reasons' in request.path %}active{% endif %}">
+    <i class="fa-solid fa-comment-dots"></i> Absence reasons</a>
+  <a href="{% url 'academics:teachers' %}" class="{% if '/manage/teachers' in request.path %}active{% endif %}">
+    <i class="fa-solid fa-chalkboard-user"></i> Teachers</a>
+{% else %}
+  <div class="nav-label">Attendance</div>
+  <a href="{% url 'attendance:sessions' %}" class="{% if '/attendance/sessions' in request.path %}active{% endif %}">
+    <i class="fa-solid fa-clock-rotate-left"></i> Class sessions</a>
+  <a href="{% url 'dashboard:reports' %}" class="{% if '/app/reports' in request.path %}active{% endif %}">
+    <i class="fa-solid fa-chart-column"></i> Reports &amp; analytics</a>
+  <a href="{% url 'notifications:alerts' %}" class="{% if '/alerts' in request.path %}active{% endif %}">
+    <i class="fa-solid fa-bell"></i> Low-attendance alerts</a>
+  <a href="{% url 'attendance:absence_reasons' %}" class="{% if '/attendance/reasons' in request.path %}active{% endif %}">
+    <i class="fa-solid fa-gavel"></i> Absence reasons
+    {% if pending_reviews %}<span class="ga-nav-badge" id="ga-review-badge"
+      title="{{ pending_reviews }} awaiting your review">{{ pending_reviews }}</span>
+    {% else %}<span class="ga-nav-badge d-none" id="ga-review-badge">0</span>{% endif %}</a>
+{% endif %}
+
+<div class="nav-label">Account</div>
+<a href="{% url 'accounts:profile' %}" class="{% if '/auth/profile' in request.path %}active{% endif %}">
+  <i class="fa-solid fa-user-gear"></i> Profile &amp; security</a>

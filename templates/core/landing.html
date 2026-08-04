@@ -1,0 +1,86 @@
+{% extends "layouts/base.html" %}
+{% block title %}{{ SITE_NAME }} — geo-verified attendance{% endblock %}
+{% block body %}
+<nav class="navbar navbar-expand-lg bg-white border-bottom sticky-top">
+  <div class="container">
+    <a class="navbar-brand ga-brand" href="/"><i class="fa-solid fa-location-crosshairs text-primary"></i> {{ SITE_NAME }}</a>
+    <div class="ms-auto d-flex gap-2">
+      <a href="{% url 'accounts:login' %}" class="btn btn-light btn-sm">Sign in</a>
+      <a href="{% url 'accounts:signup' %}" class="btn btn-primary btn-sm">Register your institute</a>
+    </div>
+  </div>
+</nav>
+
+<section class="ga-gradient text-white py-5">
+  <div class="container py-4">
+    <div class="row align-items-center g-5">
+      <div class="col-lg-6">
+        <span class="ga-pill pill-grey mb-3"><i class="fa-solid fa-bolt"></i> Proxy attendance ends here</span>
+        <h1 class="display-5 fw-bold mb-3">Attendance that knows<br>who is actually in the room.</h1>
+        <p class="lead opacity-75 mb-4">
+          The teacher taps <b>Generate</b>. Every enrolled student gets a link that only works
+          inside a {{ ATT_CONF.DEFAULT_RADIUS_M }} m radius of the classroom, for as long as the teacher allows.
+        </p>
+        <div class="d-flex flex-wrap gap-2">
+          <a href="{% url 'accounts:signup' %}" class="btn btn-light btn-lg text-primary fw-bold">
+            <i class="fa-solid fa-building-columns me-2"></i>Register your institute</a>
+          <a href="{% url 'accounts:login' %}" class="btn btn-outline-light btn-lg">I already have an account</a>
+        </div>
+      </div>
+      <div class="col-lg-6">
+        <div class="bg-white text-dark rounded-4 p-4 shadow-lg">
+          <div class="d-flex align-items-center justify-content-between mb-3">
+            <div><div class="fw-bold">CS301 — Data Structures</div>
+              <small class="text-muted-2">Batch 2022-26 · Room B-204</small></div>
+            <span class="ga-pill pill-green"><span class="ga-live-dot"></span> Live</span>
+          </div>
+          <div class="row text-center g-2 mb-3">
+            <div class="col-4"><div class="border rounded-3 py-2"><div class="fs-4 fw-bold text-primary">42</div><small class="text-muted-2">Enrolled</small></div></div>
+            <div class="col-4"><div class="border rounded-3 py-2"><div class="fs-4 fw-bold text-success">38</div><small class="text-muted-2">Present</small></div></div>
+            <div class="col-4"><div class="border rounded-3 py-2"><div class="fs-4 fw-bold text-danger">04:12</div><small class="text-muted-2">Left</small></div></div>
+          </div>
+          <div class="ga-bar mb-2"><span style="width:90%;background:#10b981"></span></div>
+          <small class="text-muted-2"><i class="fa-solid fa-shield-halved text-success me-1"></i>
+            4 attempts rejected — outside the {{ ATT_CONF.DEFAULT_RADIUS_M }} m geo-fence.</small>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="py-5">
+  <div class="container">
+    <div class="row g-4">
+      <div class="col-md-6 col-lg-3">
+        <div class="card h-100"><div class="card-body">
+          <div class="ga-kpi"><div class="icon bg-grad-1 mb-3"><i class="fa-solid fa-building-columns"></i></div></div>
+          <h6 class="fw-bold">Head of institute</h6>
+          <p class="text-muted-2 mb-0 fs-13">Register the college with OTP verification, then invite each Head of Department by email.</p>
+        </div></div>
+      </div>
+      <div class="col-md-6 col-lg-3">
+        <div class="card h-100"><div class="card-body">
+          <div class="ga-kpi"><div class="icon bg-grad-2 mb-3"><i class="fa-solid fa-user-tie"></i></div></div>
+          <h6 class="fw-bold">Head of department</h6>
+          <p class="text-muted-2 mb-0 fs-13">Add subjects and batches, invite teachers with their allocations, import the student roster from Excel.</p>
+        </div></div>
+      </div>
+      <div class="col-md-6 col-lg-3">
+        <div class="card h-100"><div class="card-body">
+          <div class="ga-kpi"><div class="icon bg-grad-3 mb-3"><i class="fa-solid fa-chalkboard-user"></i></div></div>
+          <h6 class="fw-bold">Teacher</h6>
+          <p class="text-muted-2 mb-0 fs-13">Pick batch and subject, choose the link validity, send. Watch the class fill up live.</p>
+        </div></div>
+      </div>
+      <div class="col-md-6 col-lg-3">
+        <div class="card h-100"><div class="card-body">
+          <div class="ga-kpi"><div class="icon bg-grad-4 mb-3"><i class="fa-solid fa-user-graduate"></i></div></div>
+          <h6 class="fw-bold">Student</h6>
+          <p class="text-muted-2 mb-0 fs-13">Tap the link. If you are in the room, you are marked present — that's it.</p>
+        </div></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+{% endblock %}

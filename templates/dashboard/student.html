@@ -1,0 +1,163 @@
+{% extends "layouts/app.html" %}
+{% load static %}
+{% block page_title %}Hello, {{ user.short_name }}{% endblock %}
+{% block page_sub %}Your attendance at a glance.{% endblock %}
+
+{% block content %}
+<div id="open-alert"></div>
+
+<div class="card mb-3"><div class="card-body py-3">
+  <form id="filter-form" class="row g-2 align-items-end">
+    <div class="col-6 col-md-3"><label class="form-label mb-1">From</label>
+      <input type="date" class="form-control form-control-sm" id="f-start" value="{{ default_start }}"></div>
+    <div class="col-6 col-md-3"><label class="form-label mb-1">To</label>
+      <input type="date" class="form-control form-control-sm" id="f-end" value="{{ default_end }}"></div>
+    <div class="col-8 col-md-4"><label class="form-label mb-1">Subject</label>
+      <select class="form-select form-select-sm" id="f-subject">
+        <option value="">All my subjects</option>
+        {% for s in subjects %}<option value="{{ s.id }}">{{ s.code }} — {{ s.name }}</option>{% endfor %}
+      </select></div>
+    <div class="col-4 col-md-2 d-grid"><button class="btn btn-primary btn-sm"><i class="fa-solid fa-filter me-1"></i>Apply</button></div>
+    <div class="col-12"><div class="d-flex flex-wrap gap-1 pt-1">
+      <span class="ga-chip quick" data-range="30">Last 30 days</span>
+      <span class="ga-chip quick" data-range="month">This month</span>
+      <span class="ga-chip quick sel" data-range="year">This year</span>
+    </div></div>
+  </form>
+</div></div>
+
+<div class="row g-3 mb-3">
+  <div class="col-6 col-lg-3"><div class="card ga-kpi"><div class="card-body d-flex gap-3 align-items-center">
+    <div class="icon bg-grad-1"><i class="fa-solid fa-percent"></i></div>
+    <div><div class="value" id="k-pct">—</div><div class="label">Overall</div></div></div></div></div>
+  <div class="col-6 col-lg-3"><div class="card ga-kpi"><div class="card-body d-flex gap-3 align-items-center">
+    <div class="icon bg-grad-2"><i class="fa-solid fa-chalkboard"></i></div>
+    <div><div class="value" id="k-held">—</div><div class="label">Classes held</div></div></div></div></div>
+  <div class="col-6 col-lg-3"><div class="card ga-kpi"><div class="card-body d-flex gap-3 align-items-center">
+    <div class="icon bg-grad-3"><i class="fa-solid fa-circle-check"></i></div>
+    <div><div class="value" id="k-att">—</div><div class="label">Attended</div></div></div></div></div>
+  <div class="col-6 col-lg-3"><div class="card ga-kpi"><div class="card-body d-flex gap-3 align-items-center">
+    <div class="icon bg-grad-5"><i class="fa-solid fa-circle-xmark"></i></div>
+    <div><div class="value" id="k-miss">—</div><div class="label">Missed</div></div></div></div></div>
+</div>
+
+<div class="row g-3 mb-3">
+  <div class="col-lg-7"><div class="card h-100">
+    <div class="card-header"><i class="fa-solid fa-chart-line me-2 text-primary"></i>Daily &amp; cumulative attendance</div>
+    <div class="card-body"><div style="height:270px"><canvas id="chart-trend"></canvas></div></div>
+  </div></div>
+  <div class="col-lg-5"><div class="card h-100">
+    <div class="card-header"><i class="fa-solid fa-chart-simple me-2 text-primary"></i>Subject-wise</div>
+    <div class="card-body"><div style="height:270px"><canvas id="chart-subjects"></canvas></div></div>
+  </div></div>
+</div>
+
+<div class="row g-3">
+  <div class="col-lg-6"><div class="card h-100">
+    <div class="card-header"><i class="fa-solid fa-book me-2 text-primary"></i>My subjects</div>
+    <div class="card-body"><div id="tbl-subjects"></div></div>
+  </div></div>
+  <div class="col-lg-6"><div class="card h-100">
+    <div class="card-header"><i class="fa-solid fa-clock-rotate-left me-2 text-primary"></i>Recent classes</div>
+    <div class="card-body"><div id="tbl-recent"></div></div>
+  </div></div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script src="{% static 'js/reports.js' %}"></script>
+<script>
+$(function(){
+  function f(){ return GA.query({start:$("#f-start").val(), end:$("#f-end").val(), subject:$("#f-subject").val()}); }
+
+  function load(){
+    GA.loading("#chart-trend, #chart-subjects");
+    GA.loading("#tbl-subjects, #tbl-recent", {rows:6, cols:5});
+    GA.get("{% url 'dashboard:api_my_summary' %}", f(), {quiet:true}).done(function(res){
+      const d = res.data;
+      if (d.batch_archived){
+        $("#open-alert").html(
+          '<div class="alert alert-warning d-flex gap-3 align-items-start">' +
+          '<i class="fa-solid fa-box-archive fa-lg mt-1"></i><div>' +
+          '<b>Batch ' + GA.esc(d.batch_label) + ' has been archived by your institute.</b> ' +
+          'Attendance records for this batch are not being shown, and no new attendance ' +
+          'can be marked. Nothing has been deleted — contact your department office if ' +
+          'you think this is a mistake.</div></div>');
+        $("#k-pct, #k-held, #k-att, #k-miss").text("—");
+        $("#tbl-subjects, #tbl-recent").html(
+          '<div class="ga-empty"><i class="fa-solid fa-box-archive"></i>Hidden while the batch is archived.</div>');
+        GA.chart("chart-trend","line",{labels:[],datasets:[]});
+        GA.chart("chart-subjects","bar",{labels:[],datasets:[]});
+        return;
+      }
+      $("#k-pct").text(d.overall.percentage.toFixed(1)+"%");
+      $("#k-held").text(d.overall.held);
+      $("#k-att").text(d.overall.attended);
+      $("#k-miss").text(d.overall.missed);
+
+      if(d.open_sessions && d.open_sessions.length){
+        $("#open-alert").html(d.open_sessions.map(s=>
+          '<div class="alert alert-success d-flex align-items-center gap-3">'+
+          '<span class="ga-live-dot"></span><div class="flex-grow-1"><b>'+GA.esc(s.subject)+'</b> — '+
+          GA.esc(s.subject_name)+' is taking attendance right now.</div>'+
+          '<a href="'+s.url+'" class="btn btn-success btn-sm"><i class="fa-solid fa-location-crosshairs me-1"></i>Mark me present</a></div>').join(""));
+      } else { $("#open-alert").empty(); }
+
+      GA.chart("chart-trend","line",{ labels:d.trend.labels, datasets:[
+        { label:"That day %", data:d.trend.daily, borderColor:"#06b6d4", backgroundColor:"rgba(6,182,212,.10)",
+          fill:true, tension:.3, pointRadius:2, borderWidth:2 },
+        { label:"Cumulative %", data:d.trend.cumulative, borderColor:"#4f46e5", tension:.3,
+          pointRadius:0, borderWidth:2, borderDash:[5,4] }
+      ]}, { plugins:{legend:{display:true}}, scales:{ y:{ max:100 } } });
+
+      GA.chart("chart-subjects","bar",{ labels:d.subjects.map(s=>s.code), datasets:[{ label:"Attendance %",
+        data:d.subjects.map(s=>s.percentage),
+        backgroundColor:d.subjects.map(s=> s.percentage>=85?"#10b981":s.percentage>=75?"#3b82f6":s.percentage>=60?"#f59e0b":"#ef4444"),
+        borderRadius:6 }]}, { indexAxis:"y", scales:{ x:{ max:100 } } });
+
+      GA.table("#tbl-subjects", { perPage:8, rows:d.subjects, empty:"No classes held yet.", columns:[
+        { key:"code", label:"Code", render:v=>'<span class="ga-pill pill-violet">'+GA.esc(v)+'</span>' },
+        { key:"name", label:"Subject", render:v=>'<span class="fw-600">'+GA.esc(v)+'</span>' },
+        { key:"held", label:"Held", className:"text-center" },
+        { key:"attended", label:"Attended", className:"text-center" },
+        { key:"percentage", label:"Attendance", width:"160px", render:v=>GA.bar(v) }
+      ]});
+
+      GA.table("#tbl-recent", { perPage:8, rows:d.recent, empty:"No classes in this range.", columns:[
+        { key:"date", label:"Date" },
+        { key:"subject", label:"Subject", render:v=>'<span class="ga-pill pill-violet">'+GA.esc(v)+'</span>' },
+        { key:"teacher", label:"Teacher" },
+        // Click an absent status to see, or give, the reason.
+        { key:"status", label:"Status", render:(v,r)=>GA.absenceCell(r) },
+        { key:"marked_at", label:"Marked" }
+      ]});
+      bindReasons("#tbl-recent", d.recent);
+    });
+  }
+
+  function bindReasons(sel, data){
+    // Delegated: GA.table rebuilds these rows on every sort, page and filter.
+    $(sel).off("click", ".ga-reason-open").on("click", ".ga-reason-open", function(){
+      const row = data.find(r => String(r.session_id) === $(this).attr("data-session"));
+      if(row) GA.absenceReason(row, {allowSubmit:true, onSubmitted:load});
+    });
+  }
+
+  $("#filter-form").on("submit", function(e){ e.preventDefault(); load(); });
+  $("#f-subject").on("change", load);
+  $(".ga-chip.quick").on("click", function(){
+    $(".ga-chip.quick").removeClass("sel"); $(this).addClass("sel");
+    const r=$(this).data("range"), today=new Date();
+    let start = new Date(today.getFullYear(),0,1);
+    if(r==="30") start = new Date(today.getTime()-29*864e5);
+    else if(r==="month") start = new Date(today.getFullYear(), today.getMonth(), 1);
+    $("#f-start").val(start.toISOString().slice(0,10));
+    $("#f-end").val(today.toISOString().slice(0,10));
+    load();
+  });
+  load();
+  setInterval(load, 60000);
+});
+</script>
+{% endblock %}

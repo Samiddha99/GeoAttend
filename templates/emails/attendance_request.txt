@@ -1,0 +1,9 @@
+Attendance is open — {{ session.subject.code }} ({{ session.batch.label }})
+
+Hi {{ student.name }}, {{ session.teacher.get_full_name }} has opened attendance for {{ session.subject.name }}.
+
+- Valid for about {{ minutes }} minute(s)
+- You must be within {{ radius }} m of the classroom
+
+Mark yourself present:
+{{ mark_url }}

@@ -1,0 +1,265 @@
+{% extends "layouts/app.html" %}
+{% block page_title %}My absence reasons{% endblock %}
+{% block page_sub %}Reasons you have given for missed classes, and where each one stands.{% endblock %}
+
+{% block content %}
+<div class="alert alert-light border fs-13">
+  <i class="fa-solid fa-circle-info text-primary me-2"></i>
+  You can explain an absence within <b>{{ reason_window_days }} days</b> of the class, once per
+  class. Give one from <a href="{% url 'attendance:my_attendance' %}" class="fw-600">My attendance</a>
+  by clicking the red <span class="ga-pill pill-red">Absent</span> mark.
+  A reason does not change your attendance percentage — it is recorded alongside it.
+</div>
+
+<ul class="nav nav-tabs mb-3">
+  <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-past">
+    <i class="fa-solid fa-clock-rotate-left me-1"></i>Classes I missed</button></li>
+  <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-planned">
+    <i class="fa-solid fa-calendar-plus me-1"></i>Planned absences</button></li>
+</ul>
+
+<div class="tab-content">
+<div class="tab-pane fade show active" id="tab-past">
+<div class="card mb-3"><div class="card-body py-3 table-toolbar">
+  <div class="input-group input-group-sm" style="max-width:260px">
+    <span class="input-group-text"><i class="fa-solid fa-magnifying-glass"></i></span>
+    <input class="form-control" id="search" placeholder="Subject or reason…">
+  </div>
+  <select class="form-select form-select-sm" id="f-status" style="max-width:200px">
+    <option value="">All</option>
+    <option value="PENDING">Awaiting review</option>
+    <option value="APPROVED">Approved</option>
+    <option value="REJECTED">Rejected</option>
+  </select>
+  <div class="ms-auto d-flex gap-2">
+    <span class="ga-pill pill-amber" id="count-pill">0 awaiting review</span>
+    <button class="btn btn-light btn-sm" id="btn-refresh"><i class="fa-solid fa-rotate"></i></button>
+  </div>
+</div></div>
+
+<div class="card"><div class="card-body"><div id="tbl"></div></div></div>
+</div>
+
+<div class="tab-pane fade" id="tab-planned">
+  <div class="card mb-3"><div class="card-body py-3 d-flex flex-wrap gap-2 align-items-center">
+    <div class="fs-13 text-muted-2 flex-grow-1">
+      Know you will be away? Tell your teachers in advance. If you then miss a class in
+      that period, this reason is applied automatically — you will not be asked again.
+    </div>
+    <button class="btn btn-primary btn-sm" id="btn-plan">
+      <i class="fa-solid fa-calendar-plus me-1"></i>Plan an absence</button>
+    <button class="btn btn-light btn-sm" id="btn-refresh-planned">
+      <i class="fa-solid fa-rotate"></i></button>
+  </div></div>
+  <div class="card"><div class="card-body"><div id="tbl-planned"></div></div></div>
+</div>
+</div>
+
+<!-- plan an absence -->
+<div class="modal fade" id="plan-modal" tabindex="-1"><div class="modal-dialog modal-dialog-centered">
+  <div class="modal-content"><form id="plan-form">{% csrf_token %}
+    <div class="modal-header">
+      <h5 class="modal-title"><i class="fa-solid fa-calendar-plus me-2 text-primary"></i>Plan an absence</h5>
+      <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+    <div class="modal-body">
+      <div class="row g-2 mb-3">
+        <div class="col-6"><label class="form-label">From *</label>
+          <input type="date" class="form-control" name="from_date" id="plan-from" required></div>
+        <div class="col-6"><label class="form-label">To *</label>
+          <input type="date" class="form-control" name="to_date" id="plan-to" required></div>
+      </div>
+      <label class="form-label">Reason *</label>
+      <textarea class="form-control mb-3" name="reason" id="plan-reason" rows="3" required
+                maxlength="1000" placeholder="e.g. attending a family wedding out of town"></textarea>
+
+      <div class="form-check mb-2">
+        <input class="form-check-input" type="checkbox" id="plan-all" checked>
+        <label class="form-check-label fw-600" for="plan-all">All my subjects</label>
+      </div>
+      <div id="plan-subjects" class="border rounded-3 p-2 ga-scroll-y d-none" style="max-height:180px"></div>
+      <div id="plan-attach"></div>
+      <div class="invalid-feedback d-block" id="plan-err"></div>
+      <div class="form-text">
+        Each subject's teacher reviews their own class separately, so a request can be
+        approved for some subjects and not others. It does not change your attendance
+        percentage.
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+      <button type="submit" class="btn btn-primary">Submit</button>
+    </div>
+  </form></div>
+</div></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+$(function(){
+  let table = null, rows = [];
+
+  const cols = [
+    { key:"date", label:"Class", render:(v,r)=>
+      '<div class="fw-600">'+GA.esc(v)+'</div>'+
+      '<small class="text-muted-2">'+GA.esc(r.batch)+'</small>' },
+    { key:"subject", label:"Subject", render:(v,r)=>
+      '<span class="ga-pill pill-violet" title="'+GA.esc(r.subject_name)+'">'+GA.esc(v)+'</span>' },
+    { key:"reason", label:"Your reason", sortable:false,
+      csv:(v,r)=> v + ((r.attachments||[]).length
+        ? " [" + r.attachments.map(a=>a.name).join(", ") + "]" : ""),
+      render:(v,r)=>
+      '<div class="ga-clamp-2" title="'+GA.esc(v)+'">'+GA.esc(v)+'</div>'+
+      GA.attachmentList(r.attachments, {label:"YOU ATTACHED"}) },
+    { key:"submitted_at", label:"Submitted" },
+    { key:"status", label:"Status", render:function(v, r){
+        const tone = v === "APPROVED" ? "pill-green" : v === "REJECTED" ? "pill-red" : "pill-amber";
+        let html = '<span class="ga-pill '+tone+'">'+GA.esc(r.status_label)+'</span>';
+        if(r.reviewed_by){
+          html += '<div><small class="text-muted-2">by '+GA.esc(r.reviewed_by)+'</small></div>';
+        }
+        return html;
+      } },
+    { key:"review_remark", label:"Remark", sortable:false, render:v=> v
+        ? '<div class="ga-clamp-2" title="'+GA.esc(v)+'">'+GA.esc(v)+'</div>'
+        : '<span class="text-muted-2">—</span>' }
+  ];
+
+  function load(){
+    GA.loading("#tbl", {rows:6, cols:5});
+    return GA.get("{% url 'attendance:api_absence_reasons' %}",
+                  GA.query({status: $("#f-status").val()})).done(function(res){
+      rows = res.data.rows;
+      if(!table) table = GA.table("#tbl", { csvName:"my-absence-reasons",columns:cols, rows:rows, search:"#search",
+        perPage:15, empty:"You have not given a reason for any class yet."});
+      else table.setRows(rows);
+      const n = res.data.pending;
+      $("#count-pill").text(n + (n === 1 ? " awaiting review" : " awaiting review"));
+    });
+  }
+
+  $("#f-status").on("change", load);
+  $("#btn-refresh").on("click", function(){ GA.spin(this, load()); });
+  load();
+
+  /* ------------------------------------------------------ planned absences */
+  let plannedTable = null, plannedRows = [], mySubjects = [];
+
+  function decisionChips(r){
+    // Chips open a modal rather than carrying a tooltip: a tooltip cannot hold
+    // the reason and the remark together, and is invisible on a touchscreen.
+    if(!r.decisions.length) return '<span class="text-muted-2">—</span>';
+    return r.decisions.map(d => GA.plannedChip(d)).join("");
+  }
+
+  function findDecision(id){
+    for(const row of plannedRows){
+      const d = row.decisions.find(x => String(x.id) === String(id));
+      if(d) return [row, d];
+    }
+    return [null, null];
+  }
+
+  const plannedCols = [
+    { key:"from_date", label:"Period", render:(v,r)=>
+      '<div class="fw-600">'+GA.esc(v)+' – '+GA.esc(r.to_date)+'</div>'+
+      '<small class="text-muted-2">'+r.days+(r.days===1?' day':' days')+
+      (r.all_subjects?' · all subjects':'')+'</small>' },
+    { key:"reason", label:"Reason", sortable:false, render:v=>
+      '<div class="ga-clamp-2" title="'+GA.esc(v)+'">'+GA.esc(v)+'</div>' },
+    { key:"decisions", label:"Per subject", sortable:false,
+      csv:v=>(v||[]).map(d=>d.subject+": "+d.status_label).join(", "),
+      render:(v,r)=>decisionChips(r) },
+    { key:"status", label:"Overall", render:function(v,r){
+        if(r.cancelled) return '<span class="ga-pill pill-grey">Cancelled</span>';
+        const tone = v === "APPROVED" ? "pill-green" : v === "REJECTED" ? "pill-red" : "pill-amber";
+        return '<span class="ga-pill '+tone+'">'+GA.esc(r.status_label)+'</span>';
+      } },
+    { key:"id", label:"", sortable:false, className:"text-end", render:(v,r)=> r.can_cancel
+        ? '<button class="btn btn-light btn-sm cancel-plan" data-id="'+v+'" title="Cancel">'+
+          '<i class="fa-solid fa-xmark text-danger"></i></button>' : '' }
+  ];
+
+  function loadPlanned(){
+    GA.loading("#tbl-planned", {rows:5, cols:5});
+    return GA.get("{% url 'attendance:api_planned_absences' %}").done(function(res){
+      plannedRows = res.data.rows;
+      if(!plannedTable) plannedTable = GA.table("#tbl-planned",
+        { csvName:"my-planned-absences",columns:plannedCols, rows:plannedRows, perPage:10,
+         empty:"You have not planned any absences."});
+      else plannedTable.setRows(plannedRows);
+      // Delegated: GA.table rebuilds these rows on every sort and page change.
+      $("#tbl-planned").off("click", ".ga-planned-open").on("click", ".ga-planned-open", function(){
+        const [row, d] = findDecision($(this).attr("data-decision"));
+        GA.plannedDecision(row, d);
+      });
+      $("#tbl-planned").off("click", ".cancel-plan").on("click", ".cancel-plan", function(){
+        const id = $(this).attr("data-id");
+        GA.confirm({title:"Cancel this planned absence?", variant:"warning",
+                    body:"Your teachers will no longer see it."})
+          .done(()=> GA.post("/attendance/api/planned/"+id+"/cancel/").done(loadPlanned));
+      });
+    });
+  }
+
+  $("#plan-all").on("change", function(){
+    $("#plan-subjects").toggleClass("d-none", this.checked);
+  });
+
+  $("#btn-plan").on("click", function(){
+    $("#plan-form")[0].reset();
+    $("#plan-err").text("");
+    $("#plan-subjects").addClass("d-none");
+    // Earliest allowed is tomorrow — this form is for advance notice.
+    const t = new Date(); t.setDate(t.getDate() + 1);
+    const iso = t.toISOString().slice(0, 10);
+    $("#plan-from, #plan-to").attr("min", iso).val(iso);
+    if(!mySubjects.length){
+      GA.get("{% url 'attendance:api_my_subjects' %}").done(function(res){
+        mySubjects = res.data.rows;
+        $("#plan-subjects").html(mySubjects.map(s=>
+          '<div class="form-check"><input class="form-check-input plan-sub" type="checkbox" '+
+          'value="'+s.id+'" id="ps'+s.id+'"><label class="form-check-label fs-13" for="ps'+s.id+'">'+
+          GA.esc(s.code)+' — '+GA.esc(s.name)+'</label></div>').join(""));
+      });
+    }
+    new bootstrap.Modal("#plan-modal").show();
+  });
+
+  $("#plan-attach").html(GA.attachField("plan-files"));
+
+  $("#plan-form").on("submit", function(e){
+    e.preventDefault();
+    $("#plan-err").text("");
+    $("#plan-files-err").text("");
+    const data = {from_date:$("#plan-from").val(), to_date:$("#plan-to").val(),
+                  reason:$("#plan-reason").val()};
+    if(!$("#plan-all").prop("checked")){
+      const picked = $(".plan-sub:checked").map(function(){ return this.value; }).get();
+      if(!picked.length){ $("#plan-err").text("Pick at least one subject, or tick all."); return; }
+      data["subjects[]"] = picked;
+    }
+    // Checked here as well as on the server, so an over-size choice costs a
+    // moment rather than a long upload that is refused at the end of it.
+    const files = GA.attachCheck($("#plan-files")[0]);
+    if(!files.ok){ $("#plan-files-err").text(files.message); return; }
+    const $btn = $(this).find("[type=submit]");
+    GA.btnBusy($btn, true, files.files.length ? "Uploading…" : "Submitting…");
+    GA.post("{% url 'attendance:api_planned_absence_submit' %}",
+            GA.attachForm(data, files.files), {quiet:true})
+      .done(function(res){
+        GA.toast(res.message, "ok");
+        bootstrap.Modal.getInstance($("#plan-modal")[0]).hide();
+        loadPlanned();
+      })
+      .fail(function(xhr){
+        const r = (xhr && xhr.responseJSON) || {};
+        $("#plan-err").text(r.message || "Could not submit that.");
+      })
+      .always(()=> GA.btnBusy($btn, false));
+  });
+
+  $("#btn-refresh-planned").on("click", function(){ GA.spin(this, loadPlanned()); });
+  loadPlanned();
+});
+</script>
+{% endblock %}

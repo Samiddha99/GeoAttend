@@ -1,0 +1,142 @@
+{% extends "layouts/app.html" %}
+{% block page_title %}Subjects{% endblock %}
+{% block page_sub %}Papers offered by your department. Add them before importing students.{% endblock %}
+{% block topbar_actions %}
+<button class="btn btn-primary btn-sm" id="btn-new"><i class="fa-solid fa-plus me-1"></i>New subject</button>
+{% endblock %}
+
+{% block content %}
+<div class="card mb-3"><div class="card-body py-3 table-toolbar">
+  <div class="input-group input-group-sm" style="max-width:300px">
+    <span class="input-group-text"><i class="fa-solid fa-magnifying-glass"></i></span>
+    <input class="form-control" id="search" placeholder="Search code or name…">
+  </div>
+  {% if user.is_head %}
+  <select class="form-select form-select-sm" id="dept-filter" style="max-width:240px">
+    <option value="">All departments</option>
+    {% for d in departments %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}
+  </select>
+  {% endif %}
+  <select class="form-select form-select-sm" id="sem-filter" style="max-width:170px">
+    <option value="">All semesters</option>
+    {% for i in "12345678"|make_list %}<option value="{{ i }}">Semester {{ i }}</option>{% endfor %}
+  </select>
+  <button class="btn btn-light btn-sm ms-auto" id="btn-refresh"><i class="fa-solid fa-rotate"></i></button>
+</div></div>
+
+<div class="card"><div class="card-body"><div id="tbl"></div></div></div>
+
+<div class="modal fade" id="modal" tabindex="-1"><div class="modal-dialog modal-dialog-centered">
+  <div class="modal-content"><form id="form">{% csrf_token %}
+    <div class="modal-header">
+      <h5 class="modal-title"><i class="fa-solid fa-book me-2 text-primary"></i><span id="mtitle">New subject</span></h5>
+      <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="rec-id">
+      {% if user.is_head %}
+      <div class="mb-3"><label class="form-label">Department *</label>
+        <select class="form-select" name="department" required>
+          {% for d in departments %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}
+        </select></div>
+      {% endif %}
+      <div class="row g-3">
+        <div class="col-md-4 mb-0"><label class="form-label">Code *</label>
+          <input class="form-control text-uppercase" name="code" placeholder="DSA" required></div>
+        <div class="col-md-8 mb-0"><label class="form-label">Subject name *</label>
+          <input class="form-control" name="name" placeholder="Data Structures &amp; Algorithms" required></div>
+        <div class="col-md-6 mb-0"><label class="form-label">Semester</label>
+          <select class="form-select" name="semester">
+            {% for i in "12345678"|make_list %}<option value="{{ i }}">Semester {{ i }}</option>{% endfor %}
+          </select></div>
+        <div class="col-md-6 mb-0"><label class="form-label">Credits</label>
+          <input type="number" class="form-control" name="credits" value="4" min="0" max="20"></div>
+        <div class="col-12">
+          <div class="form-check"><input class="form-check-input" type="checkbox" name="is_active" id="act" checked>
+            <label class="form-check-label" for="act">Active</label></div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+      <button type="submit" class="btn btn-primary"><i class="fa-solid fa-check me-1"></i>Save</button>
+    </div>
+  </form></div>
+</div></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+$(function(){
+  let table = null, rows = [];
+  const modal = new bootstrap.Modal("#modal");
+  const cols = [
+    { key:"code", label:"Code", render:v=>'<span class="ga-pill pill-violet">'+GA.esc(v)+'</span>' },
+    { key:"name", label:"Subject", render:v=>'<span class="fw-600">'+GA.esc(v)+'</span>' },
+    { key:"department", label:"Department" },
+    { key:"semester", label:"Sem", className:"text-center" },
+    { key:"credits", label:"Credits", className:"text-center" },
+    { key:"teacher_count", label:"Teachers", className:"text-center" },
+    { key:"student_count", label:"Enrolled", className:"text-center" },
+    { key:"is_active", label:"Status", render:v=>GA.statusPill(v ? "active":"REVOKED") },
+    { key:"id", label:"", sortable:false, className:"text-end", render:(v,r)=>
+      '<div class="btn-group btn-group-sm">'+
+      '<button class="btn btn-light edit" data-id="'+v+'"><i class="fa-solid fa-pen"></i></button>'+
+      '<button class="btn btn-light text-danger del" data-id="'+v+'" data-name="'+GA.esc(r.code)+'"><i class="fa-solid fa-trash"></i></button></div>' }
+  ];
+
+  function applyFilters(){
+    const d = $("#dept-filter").val(), s = $("#sem-filter").val();
+    table.setRows(rows.filter(r => (!d || r.department_id == d) && (!s || r.semester == s)));
+    bind();
+  }
+
+  function load(){
+    GA.loading("#tbl", {rows:8, cols:5});
+    return GA.get("{% url 'academics:api_subjects' %}").done(function(res){
+      rows = res.data.rows;
+      if (!table) table = GA.table("#tbl", { csvName:"subjects", columns: cols, rows: rows, search:"#search",
+        empty:"No subjects yet. Add the papers your department offers." });
+      else table.setRows(rows);
+      applyFilters();
+    });
+  }
+
+  function bind(){
+    $("#tbl").off("click", ".edit").on("click", ".edit", function(){
+      const r = rows.find(x => x.id == $(this).attr("data-id"));
+      $("#mtitle").text("Edit subject"); $("#rec-id").val(r.id);
+      $('#form [name=code]').val(r.code); $('#form [name=name]').val(r.name);
+      $('#form [name=semester]').val(r.semester); $('#form [name=credits]').val(r.credits);
+      $('#form [name=is_active]').prop("checked", r.is_active);
+      $('#form [name=department]').val(r.department_id);
+      modal.show();
+    });
+    $("#tbl").off("click", ".del").on("click", ".del", function(){
+      const id = $(this).attr("data-id");
+      GA.confirm({title:"Remove "+$(this).data("name")+"?", body:"Subjects already in use are deactivated instead."})
+        .done(()=> GA.post("/manage/api/subjects/"+id+"/delete/").done(load));
+    });
+  }
+
+  $("#btn-new").on("click", function(){
+    $("#form")[0].reset(); $("#rec-id").val(""); $("#mtitle").text("New subject");
+    $('#form [name=is_active]').prop("checked", true);
+    GA.clearErrors($("#form")); modal.show();
+  });
+  $("#btn-refresh").on("click", function(){ GA.spin(this, load()); });
+  $("#dept-filter, #sem-filter").on("change", applyFilters);
+
+  $("#form").on("submit", function(e){
+    e.preventDefault();
+    const id = $("#rec-id").val();
+    GA.submit($(this), {
+      url: id ? "/manage/api/subjects/"+id+"/save/" : "{% url 'academics:api_subject_create' %}",
+      onSuccess: function(){ modal.hide(); load(); }
+    });
+  });
+
+  load();
+});
+</script>
+{% endblock %}

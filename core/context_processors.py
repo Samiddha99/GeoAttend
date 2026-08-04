@@ -1,0 +1,57 @@
+from django.conf import settings
+
+
+def site(request):
+    """Expose a few globals to every template."""
+    user = getattr(request, "user", None)
+    return {
+        "SITE_NAME": settings.SITE_NAME,
+        "SITE_URL": settings.SITE_URL,
+        "ATT_CONF": settings.ATTENDANCE,
+        "current_role": getattr(user, "role", None) if getattr(user, "is_authenticated", False) else None,
+        "pending_reviews": pending_review_count(user),
+    }
+
+
+def pending_review_count(user):
+    """
+    How many absence decisions are waiting on this person.
+
+    Rendered server-side so the badge is correct on first paint rather than
+    appearing a moment later; the reasons page then keeps it live from data it
+    already loads, without another round trip.
+
+    Returns 0 for anyone who cannot review, so the badge simply never shows.
+    """
+    if not getattr(user, "is_authenticated", False):
+        return 0
+    if user.role not in ("HEAD", "HOD", "TEACHER"):
+        return 0
+
+    # Imported here: this module is loaded during settings/template setup, and
+    # importing models at module scope would drag the app registry in too early.
+    from academics.models import Subject, TeacherAssignment
+    from academics.selectors import departments_for
+    from attendance.models import AbsenceReason, PlannedAbsenceDecision
+
+    reasons = AbsenceReason.objects.filter(status=AbsenceReason.Status.PENDING)
+    decisions = PlannedAbsenceDecision.objects.filter(
+        status=AbsenceReason.Status.PENDING, planned__cancelled_at__isnull=True)
+
+    if user.is_teacher:
+        # The same scoping the two queues use: sessions this teacher ran, and
+        # planned absences touching subjects they are allocated to.
+        reasons = reasons.filter(session__teacher=user)
+        decisions = decisions.filter(
+            subject__in=TeacherAssignment.objects.filter(
+                teacher=user, is_active=True).values("subject_id"))
+    elif user.is_hod:
+        departments = departments_for(user)
+        reasons = reasons.filter(session__subject__department__in=departments)
+        decisions = decisions.filter(subject__department__in=departments)
+    else:
+        subjects = Subject.objects.filter(department__institute=user.institute)
+        reasons = reasons.filter(session__subject__in=subjects)
+        decisions = decisions.filter(subject__in=subjects)
+
+    return reasons.count() + decisions.count()

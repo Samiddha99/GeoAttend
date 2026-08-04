@@ -1,0 +1,88 @@
+{% extends "layouts/base.html" %}
+{% block title %}Complete your registration · {{ SITE_NAME }}{% endblock %}
+{% block body %}
+<div class="ga-auth">
+  {% include "partials/auth_visual.html" %}
+  <div class="ga-auth-form">
+    <div class="ga-auth-box">
+
+      {% if error %}
+        <div class="text-center">
+          <div class="ga-avatar lg mx-auto mb-3" style="background:linear-gradient(135deg,#ef4444,#f97316)">
+            <i class="fa-solid fa-link-slash"></i></div>
+          <h4 class="fw-bold">Invitation unavailable</h4>
+          <p class="text-muted-2">{{ error }}</p>
+          <a href="{% url 'accounts:login' %}" class="btn btn-primary mt-2">Go to sign in</a>
+        </div>
+      {% else %}
+        <h3 class="fw-bold mb-1">You're invited</h3>
+        <p class="text-muted-2 mb-4">
+          {{ invitation.institute.name }} has added you as
+          <b>{{ invitation.get_role_display }}</b>{% if invitation.department %} in
+          <b>{{ invitation.department.name }}</b>{% endif %}. Set a password to finish.
+        </p>
+
+        <div class="card mb-4" style="background:var(--ga-primary-soft);border-color:#c7d2fe">
+          <div class="card-body py-3">
+            <div class="row g-2 fs-13">
+              <div class="col-6"><div class="text-muted-2">Email (fixed)</div><div class="fw-600">{{ invitation.email }}</div></div>
+              <div class="col-6"><div class="text-muted-2">Role (fixed)</div><div class="fw-600">{{ invitation.get_role_display }}</div></div>
+              {% if invitation.department %}
+              <div class="col-6"><div class="text-muted-2">Department (fixed)</div><div class="fw-600">{{ invitation.department.name }}</div></div>
+              {% endif %}
+              <div class="col-6"><div class="text-muted-2">Institute</div><div class="fw-600">{{ invitation.institute.name }}</div></div>
+            </div>
+          </div>
+        </div>
+
+        <form id="invite-form" novalidate>
+          {% csrf_token %}
+          <input type="hidden" name="device_hash" id="device-hash">
+          <div class="mb-3">
+            <label class="form-label">Full name *</label>
+            <input class="form-control" name="full_name" value="{{ invitation.full_name }}" required autofocus>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Mobile number</label>
+            <input class="form-control" name="phone" placeholder="+91 90000 00000">
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Create password *</label>
+            <input type="password" class="form-control" name="password1" required>
+            <div class="ga-bar mt-2"><span id="pw-meter" style="width:0"></span></div>
+            <div class="form-text">At least 8 characters, not entirely numeric.</div>
+          </div>
+          <div class="mb-4">
+            <label class="form-label">Confirm password *</label>
+            <input type="password" class="form-control" name="password2" required>
+          </div>
+          <button class="btn btn-primary w-100 btn-lg" type="submit">
+            <i class="fa-solid fa-circle-check me-2"></i>Activate my account
+          </button>
+        </form>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+$(function(){
+  $('input[name=password1]').on("input", function(){
+    const v = $(this).val();
+    let s = Math.min(100, v.length*8 + (/[A-Z]/.test(v)?18:0) + (/[0-9]/.test(v)?18:0) + (/[^A-Za-z0-9]/.test(v)?22:0));
+    $("#pw-meter").css({width:s+"%", background:s>75?"#10b981":s>45?"#f59e0b":"#ef4444", height:"100%", display:"block", borderRadius:"99px"});
+  });
+  $("#invite-form").on("submit", function(e){
+    e.preventDefault();
+    // The device used to activate becomes the student's registered device.
+    $("#device-hash").val(GA.deviceHash());
+    GA.submit($(this), {
+      url: "{% url 'accounts:api_invite_accept' token=token %}",
+      busyText: "Creating your account…"
+    });
+  });
+});
+</script>
+{% endblock %}

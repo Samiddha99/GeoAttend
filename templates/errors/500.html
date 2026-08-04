@@ -1,0 +1,12 @@
+{% extends "layouts/base.html" %}
+{% block title %}500 · {{ SITE_NAME }}{% endblock %}
+{% block body %}
+<div class="d-flex align-items-center justify-content-center" style="min-height:100vh">
+  <div class="text-center" style="max-width:440px">
+    <div class="display-1 fw-bold ga-gradient-text">500</div>
+    <h4 class="fw-bold mb-2">Something went wrong</h4>
+    <p class="text-muted-2 mb-4">Our end, not yours. Please try again in a moment.</p>
+    <a href="/" class="btn btn-primary"><i class="fa-solid fa-house me-2"></i>Back to safety</a>
+  </div>
+</div>
+{% endblock %}

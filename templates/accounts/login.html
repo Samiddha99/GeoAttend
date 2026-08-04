@@ -1,0 +1,93 @@
+{% extends "layouts/base.html" %}
+{% block title %}Sign in · {{ SITE_NAME }}{% endblock %}
+{% block body %}
+<div class="ga-auth">
+  {% include "partials/auth_visual.html" %}
+  <div class="ga-auth-form">
+    <div class="ga-auth-box">
+      <div class="d-lg-none ga-brand fs-4 mb-4 text-center">
+        <i class="fa-solid fa-location-crosshairs text-primary"></i> {{ SITE_NAME }}
+      </div>
+      <h3 class="fw-bold mb-1">Welcome back</h3>
+      <p class="text-muted-2 mb-4">Sign in to continue to your dashboard.</p>
+
+      <form id="login-form" novalidate>
+        {% csrf_token %}
+        <input type="hidden" name="next" value="{{ next }}">
+        <input type="hidden" name="device_hash" id="device-hash">
+        <div class="mb-3">
+          <label class="form-label">Email address</label>
+          <div class="input-group">
+            <span class="input-group-text"><i class="fa-solid fa-envelope"></i></span>
+            <input type="email" class="form-control" name="email" placeholder="you@college.edu" required autofocus>
+          </div>
+        </div>
+        <div class="mb-3">
+          <div class="d-flex justify-content-between">
+            <label class="form-label">Password</label>
+            <a href="{% url 'accounts:forgot' %}" class="fs-13">Forgot password?</a>
+          </div>
+          <div class="input-group">
+            <span class="input-group-text"><i class="fa-solid fa-lock"></i></span>
+            <input type="password" class="form-control" name="password" placeholder="••••••••" required>
+            <span class="input-group-text" style="cursor:pointer" id="toggle-pw"><i class="fa-solid fa-eye"></i></span>
+          </div>
+        </div>
+        <div class="form-check mb-4">
+          <input class="form-check-input" type="checkbox" name="remember" id="remember" checked>
+          <label class="form-check-label fs-13" for="remember">Keep me signed in</label>
+        </div>
+        <button class="btn btn-primary w-100 btn-lg" type="submit">
+          <i class="fa-solid fa-arrow-right-to-bracket me-2"></i>Sign in
+        </button>
+      </form>
+
+      <div class="alert alert-warning fs-13 mt-3 d-none" id="device-help">
+        <i class="fa-solid fa-mobile-screen me-1"></i>
+        <b>Signing in from a new phone?</b> Student accounts are locked to one device.
+        Ask your teacher, HoD or department office to unlink the old one — they can do it
+        in seconds from the Students screen, and you can sign in straight afterwards.
+      </div>
+
+      <div class="text-center mt-4">
+        <small class="text-muted-2">
+          Institute not registered yet?
+          <a href="{% url 'accounts:signup' %}" class="fw-600">Create an institute account</a>
+        </small>
+        <div class="mt-2"><small class="text-muted-2">
+          HoDs, teachers and students join through the invitation email sent by their institute.
+        </small></div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+$(function(){
+  $("#toggle-pw").on("click", function(){
+    const $i = $('input[name=password]');
+    const show = $i.attr("type") === "password";
+    $i.attr("type", show ? "text" : "password");
+    $(this).find("i").toggleClass("fa-eye fa-eye-slash");
+  });
+  // Students are tied to one device; the server compares this signature.
+  $("#device-hash").val(GA.deviceHash());
+
+  $("#login-form").on("submit", function(e){
+    e.preventDefault();
+    $("#device-hash").val(GA.deviceHash());
+    GA.submit($(this), {
+      url: "{% url 'accounts:api_login' %}",
+      busyText: "Signing in…",
+      onError: function(res){
+        if (res && res.code === "DEVICE_MISMATCH") {
+          $("#device-help").removeClass("d-none");
+        }
+      }
+    });
+  });
+});
+</script>
+{% endblock %}

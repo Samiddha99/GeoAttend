@@ -1,0 +1,283 @@
+{% extends "layouts/app.html" %}
+{% load static %}
+{% block page_title %}Reports &amp; analytics{% endblock %}
+{% block page_sub %}Slice attendance by student, subject, batch, teacher or department.{% endblock %}
+{% block topbar_actions %}
+<button class="btn btn-light btn-sm" onclick="window.print()"><i class="fa-solid fa-print me-1"></i>Print</button>
+{% endblock %}
+
+{% block content %}
+{% include "partials/filters.html" %}
+
+<ul class="nav nav-tabs mb-3" id="report-tabs">
+  <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#r-students">
+    <i class="fa-solid fa-user-graduate me-1"></i>Student-wise</button></li>
+  <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#r-subjects">
+    <i class="fa-solid fa-book me-1"></i>Subject-wise</button></li>
+  <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#r-batches">
+    <i class="fa-solid fa-layer-group me-1"></i>Batch &amp; department</button></li>
+  {% if user.is_head or user.is_hod %}
+  <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#r-teachers">
+    <i class="fa-solid fa-chalkboard-user me-1"></i>Teacher activity</button></li>
+  {% endif %}
+  <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#r-risk">
+    <i class="fa-solid fa-triangle-exclamation me-1"></i>At-risk</button></li>
+</ul>
+
+<div class="tab-content">
+  <!-- students -->
+  <div class="tab-pane fade show active" id="r-students">
+    <div class="card"><div class="card-body">
+      <div class="table-toolbar mb-3">
+        <div class="input-group input-group-sm" style="max-width:280px">
+          <span class="input-group-text"><i class="fa-solid fa-magnifying-glass"></i></span>
+          <input class="form-control" id="s-search" placeholder="Search students…">
+        </div>
+        <select class="form-select form-select-sm" id="s-sort" style="max-width:220px">
+          <option value="percentage">Sort: lowest attendance</option>
+          <option value="-percentage">Sort: highest attendance</option>
+          <option value="name">Sort: name</option>
+        </select>
+        <div class="ms-auto d-flex gap-2 align-items-center">
+          <span class="ga-pill pill-blue" id="s-count">0</span>
+          <a class="btn btn-light btn-sm" id="s-export"><i class="fa-solid fa-file-csv me-1"></i>CSV</a>
+        </div>
+      </div>
+      <div id="tbl-students"></div>
+      <p class="text-muted-2 fs-12 mt-2 mb-0">
+        Click any row to open the student's full record: per-subject percentages, daily trend and class history.</p>
+    </div></div>
+  </div>
+
+  <!-- subjects -->
+  <div class="tab-pane fade" id="r-subjects">
+    <div class="row g-3">
+      <div class="col-lg-5"><div class="card h-100">
+        <div class="card-header">Attendance by subject</div>
+        <div class="card-body"><div style="height:340px"><canvas id="c-subjects"></canvas></div></div>
+      </div></div>
+      <div class="col-lg-7"><div class="card h-100">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <span>Subject detail</span>
+          <a class="btn btn-light btn-sm" id="sub-export"><i class="fa-solid fa-file-csv me-1"></i>CSV</a>
+        </div>
+        <div class="card-body"><div id="tbl-subjects"></div></div>
+      </div></div>
+    </div>
+  </div>
+
+  <!-- batches -->
+  <div class="tab-pane fade" id="r-batches">
+    <div class="row g-3">
+      <div class="col-lg-6"><div class="card h-100">
+        <div class="card-header">Batch comparison</div>
+        <div class="card-body"><div style="height:300px"><canvas id="c-batches"></canvas></div>
+          <div id="tbl-batches" class="mt-3"></div></div>
+      </div></div>
+      <div class="col-lg-6"><div class="card h-100">
+        <div class="card-header">Department comparison</div>
+        <div class="card-body"><div style="height:300px"><canvas id="c-depts"></canvas></div>
+          <div id="tbl-depts" class="mt-3"></div></div>
+      </div></div>
+    </div>
+  </div>
+
+  {% if user.is_head or user.is_hod %}
+  <div class="tab-pane fade" id="r-teachers">
+    <div class="card"><div class="card-body">
+      <div style="height:300px"><canvas id="c-teachers"></canvas></div>
+      <div id="tbl-teachers" class="mt-3"></div>
+    </div></div>
+  </div>
+  {% endif %}
+
+  <!-- risk -->
+  <div class="tab-pane fade" id="r-risk">
+    <div class="card"><div class="card-body">
+      <div class="table-toolbar mb-3">
+        <label class="form-label mb-0">Threshold</label>
+        <div class="input-group input-group-sm" style="max-width:140px">
+          <input type="number" class="form-control" id="risk-threshold" value="{{ threshold }}" min="1" max="100">
+          <span class="input-group-text">%</span>
+        </div>
+        <button class="btn btn-primary btn-sm" id="risk-apply">Apply</button>
+        <a class="btn btn-soft btn-sm" href="{% url 'notifications:alerts' %}">
+          <i class="fa-solid fa-bell me-1"></i>Send alerts to these students</a>
+        <span class="ga-pill pill-red ms-auto" id="risk-count">0 students</span>
+      </div>
+      <div id="tbl-risk"></div>
+    </div></div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{% static 'js/reports.js' %}"></script>
+<script>
+$(function(){
+  let studentsTable=null, studentRows=[];
+
+  function loadStudents(){
+    const f = GA.filters();
+    // returns its promise so loadAll() can wait on it
+    GA.loading("#tbl-students", {rows:10, cols:7});
+    GA.loading("#s-count");
+    return GA.get("{% url 'dashboard:api_students_report' %}", f, {quiet:true}).done(function(res){
+      studentRows = res.data.rows;
+      $("#s-count").text(studentRows.length + " students"); GA.done("#s-count");
+      $("#s-export").attr("href", "{% url 'dashboard:export_students' %}?"+$.param(f));
+      const cols = [
+        { key:"name", label:"Student", render:(v,r)=>'<div class="d-flex align-items-center gap-2">'+GA.avatar(v)+
+          '<div><div class="fw-600">'+GA.esc(v)+'</div><small class="text-muted-2">'+GA.esc(r.email)+'</small></div></div>' },
+        { key:"roll", label:"Class roll" },
+        // Optional on the student record, so a blank one gets a dash rather
+        // than an empty cell that reads as a rendering fault.
+        { key:"exam_roll", label:"Exam roll",
+          render:v=> v ? GA.esc(v) : '<span class="text-muted-2">—</span>' },
+        { key:"department", label:"Department" },
+        { key:"batch", label:"Batch" },
+        { key:"held", label:"Held", className:"text-center" },
+        { key:"attended", label:"Attended", className:"text-center" },
+        { key:"percentage", label:"Overall", width:"170px", render:v=>GA.bar(v) },
+        { key:"subjects", label:"Per subject", sortable:false,
+          csv:v=>(v||[]).map(s=>s.code+" "+s.attended+"/"+s.held+
+                                " ("+s.percentage.toFixed(0)+"%)").join(", "),
+          render:v=>
+          (v||[]).map(s=>'<span class="ga-chip" title="'+GA.esc(s.name)+': '+s.attended+'/'+s.held+'">'+
+            GA.esc(s.code)+' '+s.percentage.toFixed(0)+'%</span>').join("") || '<span class="text-muted-2">—</span>' },
+        { key:"student_id", label:"", sortable:false, className:"text-end", render:v=>
+          '<a href="/app/students/'+v+'/" class="btn btn-light btn-sm"><i class="fa-solid fa-chevron-right"></i></a>' }
+      ];
+      if(!studentsTable) studentsTable = GA.table("#tbl-students",{csv:false, columns:cols, rows:studentRows, perPage:20,
+        search:"#s-search", empty:"No students match these filters.",
+        onRowClick:(r)=> window.location="/app/students/"+r.student_id+"/"});
+      else studentsTable.setRows(studentRows);
+      sortStudents();
+    });
+  }
+
+  function sortStudents(){
+    const v = $("#s-sort").val();
+    let rows = studentRows.slice();
+    if(v==="percentage") rows.sort((a,b)=>a.percentage-b.percentage);
+    else if(v==="-percentage") rows.sort((a,b)=>b.percentage-a.percentage);
+    else rows.sort((a,b)=>a.name.localeCompare(b.name));
+    studentsTable.setRows(rows);
+  }
+  $("#s-sort").on("change", sortStudents);
+
+  function loadSubjects(){
+    const f = GA.filters();
+    GA.loading("#c-subjects");
+    GA.loading("#tbl-subjects", {rows:8, cols:6});
+    $("#sub-export").attr("href", "{% url 'dashboard:export_subjects' %}?"+$.param(f));
+    return GA.get("{% url 'dashboard:api_subjects_report' %}", f, {quiet:true}).done(function(res){
+      const rows = res.data.rows;
+      GA.chart("c-subjects","bar",{ labels:rows.map(r=>r.code+" ("+r.batch+")"),
+        datasets:[{ label:"Attendance %", data:rows.map(r=>r.percentage),
+          backgroundColor:rows.map(r=> r.percentage>=85?"#10b981":r.percentage>=75?"#3b82f6":r.percentage>=60?"#f59e0b":"#ef4444"),
+          borderRadius:6 }]}, { indexAxis:"y", scales:{ x:{max:100} } });
+      GA.table("#tbl-subjects",{ csv:false, perPage:12, rows:rows, empty:"No classes conducted.", columns:[
+        { key:"code", label:"Code", render:v=>'<span class="ga-pill pill-violet">'+GA.esc(v)+'</span>' },
+        { key:"name", label:"Subject" },
+        { key:"batch", label:"Batch" },
+        { key:"semester", label:"Sem", className:"text-center" },
+        { key:"classes", label:"Classes held", className:"text-center" },
+        { key:"enrolled", label:"Enrolled", className:"text-center" },
+        { key:"students_attended", label:"Attended ≥1", className:"text-center" },
+        { key:"avg_present", label:"Avg present", className:"text-center" },
+        { key:"percentage", label:"Attendance", width:"150px", render:v=>GA.bar(v) },
+        { key:"teachers", label:"Teachers" }
+      ]});
+    });
+  }
+
+  function loadBatches(){
+    const f = GA.filters();
+    GA.loading("#c-batches, #c-depts");
+    GA.loading("#tbl-batches, #tbl-depts", {rows:5, cols:3});
+    const jobs = [];
+    jobs.push(GA.get("{% url 'dashboard:api_batches_report' %}", f, {quiet:true}).done(function(res){
+      const rows = res.data.rows;
+      GA.chart("c-batches","bar",{ labels:rows.map(r=>r.label),
+        datasets:[{ label:"Attendance %", data:rows.map(r=>r.percentage), backgroundColor:"#4f46e5", borderRadius:6 }]},
+        { scales:{ y:{max:100} } });
+      GA.table("#tbl-batches",{ perPage:6, rows:rows, empty:"No data.", columns:[
+        { key:"label", label:"Batch" }, { key:"classes", label:"Classes", className:"text-center" },
+        { key:"percentage", label:"Attendance", width:"160px", render:v=>GA.bar(v) }]});
+    }));
+    {% if user.is_head %}
+    jobs.push(GA.get("{% url 'dashboard:api_departments_report' %}", f, {quiet:true}).done(function(res){
+      const rows = res.data.rows;
+      GA.chart("c-depts","bar",{ labels:rows.map(r=>r.label),
+        datasets:[{ label:"Attendance %", data:rows.map(r=>r.percentage), backgroundColor:"#10b981", borderRadius:6 }]},
+        { scales:{ y:{max:100} } });
+      GA.table("#tbl-depts",{ perPage:6, rows:rows, empty:"No data.", columns:[
+        { key:"label", label:"Department" }, { key:"classes", label:"Classes", className:"text-center" },
+        { key:"percentage", label:"Attendance", width:"160px", render:v=>GA.bar(v) }]});
+    }));
+    {% else %}
+    GA.done("#c-depts, #tbl-depts");
+    $("#c-depts").closest(".card").find(".card-body").html(
+      '<div class="ga-empty"><i class="fa-solid fa-lock"></i>Department comparison is available to the head of the institute.</div>');
+    {% endif %}
+    return $.when.apply($, jobs);
+  }
+
+  {% if user.is_head or user.is_hod %}
+  function loadTeachers(){
+    GA.loading("#c-teachers");
+    GA.loading("#tbl-teachers", {rows:8, cols:5});
+    return GA.get("{% url 'dashboard:api_teachers_report' %}", GA.filters(), {quiet:true}).done(function(res){
+      const rows = res.data.rows;
+      GA.chart("c-teachers","bar",{ labels:rows.map(r=>r.label), datasets:[
+        { label:"Classes conducted", data:rows.map(r=>r.classes), backgroundColor:"#06b6d4", borderRadius:6, yAxisID:"y" },
+        { label:"Avg attendance %", data:rows.map(r=>r.percentage), type:"line", borderColor:"#4f46e5",
+          pointRadius:3, borderWidth:2, yAxisID:"y1" }
+      ]}, { plugins:{legend:{display:true}}, scales:{ y:{beginAtZero:true}, y1:{position:"right", max:100, grid:{display:false}} } });
+      GA.table("#tbl-teachers",{ perPage:10, rows:rows, empty:"No sessions in this range.", columns:[
+        { key:"label", label:"Teacher", render:(v)=>'<div class="d-flex align-items-center gap-2">'+GA.avatar(v)+'<span class="fw-600">'+GA.esc(v)+'</span></div>' },
+        { key:"classes", label:"Classes conducted", className:"text-center" },
+        { key:"percentage", label:"Average attendance", width:"200px", render:v=>GA.bar(v) }]});
+    });
+  }
+  {% endif %}
+
+  function loadRisk(){
+    const f = $.extend({threshold:$("#risk-threshold").val()}, GA.filters());
+    GA.loading("#risk-count");
+    GA.loading("#tbl-risk", {rows:10, cols:5});
+    return GA.get("{% url 'dashboard:api_low_attendance' %}", f, {quiet:true}).done(function(res){
+      $("#risk-count").text(res.data.count+" students below "+res.data.threshold+"%"); GA.done("#risk-count");
+      GA.table("#tbl-risk",{ perPage:20, rows:res.data.rows, empty:"Nobody is below the threshold. 🎉", columns:[
+        { key:"name", label:"Student", render:(v,r)=>'<div class="d-flex align-items-center gap-2">'+GA.avatar(v)+
+          '<div><div class="fw-600">'+GA.esc(v)+'</div><small class="text-muted-2">'+GA.esc(r.email)+'</small></div></div>' },
+        { key:"roll", label:"Class roll" },
+        { key:"batch", label:"Batch" },
+        { key:"held", label:"Held", className:"text-center" },
+        { key:"attended", label:"Attended", className:"text-center" },
+        { key:"percentage", label:"Overall", width:"170px", render:v=>GA.bar(v) },
+        { key:"subjects", label:"Weakest subjects", sortable:false,
+          csv:v=>(v||[]).slice().sort((a,b)=>a.percentage-b.percentage).slice(0,3)
+                 .map(s=>s.code+" "+s.percentage.toFixed(0)+"%").join(", "),
+          render:v=>
+          (v||[]).slice().sort((a,b)=>a.percentage-b.percentage).slice(0,3)
+            .map(s=>'<span class="ga-chip">'+GA.esc(s.code)+' '+s.percentage.toFixed(0)+'%</span>').join("") },
+        { key:"student_id", label:"", sortable:false, className:"text-end", render:v=>
+          '<a href="/app/students/'+v+'/" class="btn btn-light btn-sm"><i class="fa-solid fa-chevron-right"></i></a>' }
+      ]});
+    });
+  }
+  $("#risk-apply").on("click", function(){ GA.spin(this, loadRisk()); });
+
+  function loadAll(){
+    // Aggregate so the Apply button spins until the slowest panel is done.
+    const jobs = [loadStudents(), loadSubjects(), loadBatches(), loadRisk()];
+    {% if user.is_head or user.is_hod %}jobs.push(loadTeachers());{% endif %}
+    return $.when.apply($, jobs);
+  }
+  GA.initFilters(loadAll);
+  loadAll();
+});
+</script>
+{% endblock %}

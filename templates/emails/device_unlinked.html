@@ -1,0 +1,21 @@
+{% extends "emails/base_email.html" %}{% block content %}
+<h2 style="margin:0 0 8px;font-size:19px">Your device has been unlinked</h2>
+<p style="color:#475569;font-size:14px">
+  Hi {{ user.short_name }}, the device registered to your {{ SITE_NAME }} account has been
+  released{% if not self_service %} by <b>{{ actor.get_full_name }}</b>
+  ({{ actor.get_role_display }}){% endif %}.{% if reason %} Reason given: <i>{{ reason }}</i>.{% endif %}
+</p>
+<p style="color:#475569;font-size:14px">
+  The next device you mark attendance from will become your registered device.
+</p>
+<table style="width:100%;background:#fff7ed;border-radius:10px;margin:18px 0">
+  <tr><td style="font-size:13px;color:#9a3412;padding:12px">
+    <b>Didn't expect this?</b> Contact your department office straight away — someone may be
+    trying to mark attendance on your behalf.
+  </td></tr>
+</table>
+<div style="text-align:center;margin:24px 0">
+  <a href="{{ login_url }}" style="background:#4f46e5;color:#fff;text-decoration:none;padding:11px 26px;
+     border-radius:10px;font-weight:600;font-size:14px;display:inline-block">Sign in</a>
+</div>
+{% endblock %}

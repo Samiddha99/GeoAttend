@@ -1,0 +1,7 @@
+{% extends "emails/base_email.html" %}{% block content %}
+<div style="font-size:14px;color:#334155;line-height:1.65;white-space:pre-wrap">{{ body }}</div>
+<div style="margin-top:24px;text-align:center">
+  <a href="{{ login_url }}" style="background:#4f46e5;color:#fff;text-decoration:none;padding:11px 26px;
+     border-radius:10px;font-weight:600;font-size:14px;display:inline-block">View my attendance</a>
+</div>
+{% endblock %}

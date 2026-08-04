@@ -1,0 +1,412 @@
+{% extends "layouts/app.html" %}
+{% block page_title %}{{ page_heading|default:"Students" }}{% endblock %}
+{% block page_sub %}{% if can_import %}Import the roster from Excel — every student is emailed an activation link.{% elif wide %}Every student in the institute. You can unlink a lost device; editing stays with the HoD.{% else %}Students in the classes you teach.{% endif %}{% endblock %}
+{% block topbar_actions %}
+<a href="{% url 'academics:api_students_export' %}" class="btn btn-light btn-sm" id="btn-export">
+  <i class="fa-solid fa-file-export me-1"></i>Export roster</a>
+{% if can_import %}
+<a href="{% url 'academics:api_students_template' %}" class="btn btn-light btn-sm">
+  <i class="fa-solid fa-download me-1"></i>Template</a>
+<button class="btn btn-primary btn-sm" data-bs-toggle="modal" data-bs-target="#import-modal">
+  <i class="fa-solid fa-file-import me-1"></i>Import roster</button>
+{% endif %}
+{% endblock %}
+
+{% block content %}
+<div class="card mb-3"><div class="card-body py-3 table-toolbar">
+  <div class="input-group input-group-sm" style="max-width:280px">
+    <span class="input-group-text"><i class="fa-solid fa-magnifying-glass"></i></span>
+    <input class="form-control" id="search" placeholder="Name, email, class or exam roll…">
+  </div>
+  <select class="form-select form-select-sm {% if departments|length < 2 %}d-none{% endif %}"
+          id="f-department" style="max-width:200px">
+    <option value="">All departments</option>
+    {% for d in departments %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}
+  </select>
+  <select class="form-select form-select-sm" id="f-batch" style="max-width:200px"><option value="">All batches</option></select>
+  <select class="form-select form-select-sm" id="f-subject" style="max-width:240px"><option value="">All subjects</option></select>
+  <select class="form-select form-select-sm" id="f-status" style="max-width:170px">
+    <option value="">Any status</option><option value="active">Activated</option>
+    <option value="invited">Invited</option><option value="no-guardian">Missing guardian no.</option>
+    <option value="device-linked">Device linked</option>
+  </select>
+  <div class="ms-auto d-flex gap-2">
+    <span class="ga-pill pill-blue" id="count-pill">0 students</span>
+    <button class="btn btn-light btn-sm" id="btn-refresh"><i class="fa-solid fa-rotate"></i></button>
+    {% if can_import %}<button class="btn btn-light btn-sm" data-bs-toggle="modal" data-bs-target="#history-modal">
+      <i class="fa-solid fa-clock-rotate-left"></i></button>{% endif %}
+  </div>
+</div></div>
+
+<div class="card"><div class="card-body"><div id="tbl"></div></div></div>
+
+{% if can_import %}
+<!-- import modal -->
+<div class="modal fade" id="import-modal" tabindex="-1"><div class="modal-dialog modal-xl modal-dialog-centered">
+  <div class="modal-content">
+    <div class="modal-header">
+      <h5 class="modal-title"><i class="fa-solid fa-file-excel me-2 text-success"></i>Import student roster</h5>
+      <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+    <div class="modal-body">
+      <div class="alert alert-light border fs-13 d-flex gap-3">
+        <i class="fa-solid fa-circle-info text-primary mt-1"></i>
+        <div>
+          <b>For new students:</b> <code>email</code>, <code>name</code>, <code>class roll</code>,
+          <code>batch</code> (e.g. 2022-26), <code>subjects enrolled</code> (comma separated codes, e.g. DSA, DBMS, AI)
+          and <code>guardian mobile</code> — the WhatsApp number that receives low-attendance alerts.
+          <code>exam roll</code>, <code>mobile number</code>, <code>guardian name</code> and
+          <code>guardian email</code> are optional. Header spelling is flexible; extra columns are ignored.
+          <div class="mt-1 p-2 rounded-3" style="background:#eef2ff">
+            <b><i class="fa-solid fa-rotate me-1"></i>Updating students in bulk.</b>
+            A row whose <code>email</code> already exists <b>updates</b> that student rather than
+            creating a second one — so you can upload a sheet of just <code>email</code> +
+            <code>guardian mobile</code> and only guardian mobiles change.
+            A <b>blank cell leaves the current value alone</b>; put a single <code>-</code> to clear it.
+            Leaving <code>subjects enrolled</code> blank keeps their existing enrolments.
+          </div>
+          <div class="mt-1">Add your subjects <b>before</b> importing — unknown subject codes are reported as errors.
+          <a href="{% url 'academics:api_students_template' %}">Download the template</a>.</div>
+        </div>
+      </div>
+
+      <form id="import-form">
+        {% csrf_token %}
+        <div class="row g-3 align-items-end">
+          {% if user.is_head %}
+          <div class="col-md-4"><label class="form-label">Department *</label>
+            <select class="form-select" name="department" required>
+              {% for d in departments %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}
+            </select></div>
+          {% endif %}
+          <div class="col-md-5"><label class="form-label">Spreadsheet (.xlsx / .csv) *</label>
+            <input type="file" class="form-control" name="file" accept=".xlsx,.xlsm,.csv" required></div>
+          <div class="col-md-3 d-flex gap-2">
+            <button type="button" class="btn btn-light w-100" id="btn-preview"><i class="fa-solid fa-eye me-1"></i>Preview</button>
+          </div>
+        </div>
+      </form>
+
+      <div id="import-result" class="mt-3 d-none">
+        <div class="row g-2 mb-3" id="import-counts"></div>
+        <div id="import-table"></div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button type="button" class="btn btn-light" data-bs-dismiss="modal">Close</button>
+      <button type="button" class="btn btn-primary" id="btn-import" disabled>
+        <i class="fa-solid fa-cloud-arrow-up me-1"></i>Import &amp; send invitations</button>
+    </div>
+  </div>
+</div></div>
+
+<!-- history modal -->
+<div class="modal fade" id="history-modal" tabindex="-1"><div class="modal-dialog modal-lg modal-dialog-centered">
+  <div class="modal-content">
+    <div class="modal-header"><h5 class="modal-title">Import history</h5>
+      <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+    <div class="modal-body"><div id="history-table"></div></div>
+  </div>
+</div></div>
+{% endif %}
+
+<!-- unlink device modal -->
+<div class="modal fade" id="unlink-modal" tabindex="-1"><div class="modal-dialog modal-dialog-centered">
+  <div class="modal-content">
+    <div class="modal-header">
+      <h5 class="modal-title"><i class="fa-solid fa-link-slash me-2 text-primary"></i>Unlink device</h5>
+      <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+    <div class="modal-body">
+      <p class="mb-2">Release the device registered to <b id="unlink-name"></b>?</p>
+      <p class="text-muted-2 fs-13" id="unlink-since"></p>
+      <div class="alert alert-light border fs-13 d-flex gap-2">
+        <i class="fa-solid fa-circle-info text-primary mt-1"></i>
+        <div>They will be able to mark attendance from a new phone, and
+          <b>that</b> device becomes their registered one. The student is emailed and
+          this action is recorded in the activity log.</div>
+      </div>
+      <label class="form-label">Reason (optional, stored in the log)</label>
+      <input class="form-control" id="unlink-reason" maxlength="150"
+             placeholder="Lost phone / changed handset">
+    </div>
+    <div class="modal-footer">
+      <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+      <button type="button" class="btn btn-primary" id="unlink-go">
+        <i class="fa-solid fa-link-slash me-1"></i>Unlink device</button>
+    </div>
+  </div>
+</div></div>
+
+<!-- edit modal -->
+<div class="modal fade" id="edit-modal" tabindex="-1"><div class="modal-dialog modal-dialog-centered">
+  <div class="modal-content"><form id="edit-form">{% csrf_token %}
+    <div class="modal-header"><h5 class="modal-title">Edit student</h5>
+      <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+    <div class="modal-body">
+      <input type="hidden" id="edit-id">
+      <div class="row g-3">
+        <div class="col-md-6 mb-0"><label class="form-label">Full name *</label><input class="form-control" name="full_name" required></div>
+        <div class="col-md-3 mb-0"><label class="form-label">Class roll *</label>
+          <input class="form-control" name="class_roll" required></div>
+        <div class="col-md-3 mb-0"><label class="form-label">Exam roll</label>
+          <input class="form-control" name="exam_roll" placeholder="optional"></div>
+        <div class="col-md-6 mb-0"><label class="form-label">Mobile</label><input class="form-control" name="mobile"></div>
+        <div class="col-md-6 mb-0"><label class="form-label">Batch *</label><select class="form-select" name="batch_id" id="edit-batch"></select></div>
+        <div class="col-12"><hr class="my-1"><div class="fs-12 fw-600 text-muted-2">GUARDIAN</div></div>
+        <div class="col-md-6 mb-0">
+          <label class="form-label">Guardian mobile (WhatsApp) *</label>
+          <div class="input-group">
+            <span class="input-group-text"><i class="fa-brands fa-whatsapp text-success"></i></span>
+            <input class="form-control" name="guardian_mobile" placeholder="+919812345670" required>
+          </div>
+          <div class="form-text">Receives low-attendance alerts.</div>
+        </div>
+        <div class="col-md-6 mb-0"><label class="form-label">Guardian name</label><input class="form-control" name="guardian_name"></div>
+        <div class="col-md-6 mb-0"><label class="form-label">Guardian email</label><input type="email" class="form-control" name="guardian_email"></div>
+        <div class="col-12">
+          <label class="form-label">Enrolled subjects</label>
+          <div id="edit-subjects" class="border rounded-3 p-2 ga-scroll-y"></div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+      <button type="submit" class="btn btn-primary">Save</button>
+    </div>
+  </form></div>
+</div></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+$(function(){
+  let table=null, rows=[], lookups={batches:[],subjects:[]};
+  const canImport = {{ can_import|yesno:"true,false" }};
+  // Distinct from canImport: a teacher may unlink a device but never edit.
+  const canEdit = {{ can_edit|yesno:"true,false" }};
+  // The wide screen asks the API for the whole institute.
+  const SCOPE = {% if wide %}{scope:"all"}{% else %}{}{% endif %};
+
+  const cols = [
+    { key:"name", label:"Student", render:(v,r)=>
+      '<div class="d-flex align-items-center gap-2">'+GA.avatar(v)+
+      '<div><div class="fw-600">'+GA.esc(v)+'</div><small class="text-muted-2">'+GA.esc(r.email)+'</small></div></div>' },
+    { key:"class_roll", label:"Class roll", render:v=> v
+        ? '<span class="fw-600">'+GA.esc(v)+'</span>'
+        : '<span class="ga-pill pill-amber" title="Class roll is required — edit the student to add it">missing</span>' },
+    { key:"exam_roll", label:"Exam roll", render:v=> v ? GA.esc(v)
+        : '<span class="text-muted-2">—</span>' },
+    { key:"department", label:"Department", render:v=> GA.esc(v||"—") },
+    { key:"batch", label:"Batch", render:v=>'<span class="ga-pill pill-blue">'+GA.esc(v)+'</span>' },
+    { key:"mobile", label:"Mobile", render:(v,r)=>GA.phone(r.mobile_dial) },
+    { key:"guardian_mobile", label:"Guardian (WhatsApp)", render:(v,r)=> v
+        ? '<div>'+GA.phone(r.guardian_dial)+
+          (r.guardian_name ? '<div><small class="text-muted-2">'+GA.esc(r.guardian_name)+'</small></div>' : '')+'</div>'
+        : '<span class="ga-pill pill-amber"><i class="fa-solid fa-triangle-exclamation"></i>missing</span>' },
+    { key:"subjects", label:"Subjects", sortable:false, render:v=>
+      (v||[]).map(c=>'<span class="ga-chip">'+GA.esc(c)+'</span>').join("") || '<span class="text-muted-2">—</span>' },
+    { key:"status", label:"Status", render:v=>GA.statusPill(v) },
+    { key:"device_bound", label:"Device", render:(v,r)=> v
+        ? '<span class="ga-pill pill-blue" title="Bound '+GA.esc(r.device_bound_at)+
+          '"><i class="fa-solid fa-mobile-screen"></i>Linked</span>'
+        : '<span class="ga-pill pill-grey"><i class="fa-solid fa-mobile-screen-button"></i>None</span>' },
+    { key:"id", label:"", sortable:false, className:"text-end", render:(v,r)=>
+      '<div class="btn-group btn-group-sm">'+
+      (canEdit ? '<button class="btn btn-light edit" data-id="'+v+'" title="Edit"><i class="fa-solid fa-pen"></i></button>' : '')+
+      (r.device_bound
+        ? '<button class="btn btn-light unlink" data-id="'+v+'" data-name="'+GA.esc(r.name)+
+          '" data-at="'+GA.esc(r.device_bound_at)+'" title="Unlink device — lost or changed phone">'+
+          '<i class="fa-solid fa-link-slash text-primary"></i></button>'
+        : '')+
+      (canEdit && r.status==="invited" ? '<button class="btn btn-light resend" data-id="'+v+'" title="Resend invite"><i class="fa-solid fa-paper-plane"></i></button>' : '')+
+      (canEdit ? '<button class="btn btn-light '+(r.is_active?'text-danger':'text-success')+' toggle" data-id="'+v+'" title="'+(r.is_active?'Deactivate':'Activate')+'"><i class="fa-solid fa-'+(r.is_active?'user-slash':'user-check')+'"></i></button>' : '')+
+      '</div>' }
+  ];
+
+  function applyFilters(){
+    const d=$("#f-department").val(), b=$("#f-batch").val(),
+          s=$("#f-subject").val(), st=$("#f-status").val();
+    {% if wide %}
+    const code = s || null;                  // options are codes on this screen
+    {% else %}
+    const code = s ? (lookups.subjects.find(x=>x.id==s)||{}).code : null;
+    {% endif %}
+    const view = rows.filter(r =>
+      (!d || r.department_id == d) &&
+      (!b || r.batch_id == b) &&
+      (!st || (st === "no-guardian" ? !r.guardian_mobile
+              : st === "device-linked" ? r.device_bound
+              : r.status === st)) &&
+      (!code || (r.subjects||[]).indexOf(code) > -1));
+    table.setRows(view);
+    $("#count-pill").text(view.length + " students");
+    bind();
+  }
+
+  function bind(){
+    $("#tbl").off("click", ".edit").on("click", ".edit", function(){
+      const r = rows.find(x=>x.id==$(this).attr("data-id"));
+      $("#edit-id").val(r.id);
+      $('#edit-form [name=full_name]').val(r.name==="(awaiting registration)"?"":r.name);
+      $('#edit-form [name=class_roll]').val(r.class_roll);
+      $('#edit-form [name=exam_roll]').val(r.exam_roll);
+      $('#edit-form [name=mobile]').val(r.mobile);
+      $('#edit-form [name=guardian_mobile]').val(r.guardian_mobile);
+      $('#edit-form [name=guardian_name]').val(r.guardian_name);
+      $('#edit-form [name=guardian_email]').val(r.guardian_email);
+      $("#edit-batch").html(lookups.batches.map(b=>'<option value="'+b.id+'">'+GA.esc(b.label)+'</option>').join("")).val(r.batch_id);
+      $("#edit-subjects").html(lookups.subjects.map(s=>
+        '<div class="form-check"><input class="form-check-input" type="checkbox" name="subjects[]" value="'+s.id+
+        '" id="es'+s.id+'"'+((r.subjects||[]).indexOf(s.code)>-1?' checked':'')+
+        '><label class="form-check-label fs-13" for="es'+s.id+'">'+GA.esc(s.code)+' — '+GA.esc(s.name)+'</label></div>').join(""));
+      new bootstrap.Modal("#edit-modal").show();
+    });
+    $("#tbl").off("click", ".unlink").on("click", ".unlink", function(){
+      const id = $(this).attr("data-id"), name = $(this).data("name"), at = $(this).data("at");
+      $("#unlink-name").text(name);
+      $("#unlink-since").text(at ? ("Linked since " + at + ".") : "");
+      $("#unlink-reason").val("");
+      // .attr, not .data: the click handler reads it back with .attr, and
+      // jQuery's .data() writes to its own store without touching the
+      // attribute — so the id came back undefined and the POST 404'd.
+      $("#unlink-go").attr("data-id", id);
+      new bootstrap.Modal("#unlink-modal").show();
+    });
+    $("#tbl").off("click", ".resend").on("click", ".resend", function(){ GA.post("/manage/api/students/"+$(this).attr("data-id")+"/resend/"); });
+    $("#tbl").off("click", ".toggle").on("click", ".toggle", function(){
+      const id=$(this).attr("data-id");
+      GA.confirm({title:"Change this student's access?", variant:"warning", icon:"fa-user-slash",
+        body:"Deactivated students cannot sign in or mark attendance."})
+        .done(()=> GA.post("/manage/api/students/"+id+"/toggle/").done(load));
+    });
+  }
+
+  function load(){
+    GA.loading("#tbl", {rows:10, cols:6});
+    return GA.get("{% url 'academics:api_students' %}", SCOPE).done(function(res){
+      rows = res.data.rows;
+      if(!table) table = GA.table("#tbl",{ csv:false, columns:cols, rows:rows, search:"#search", perPage:20,
+        empty:"No students match these filters."});
+      {% if wide %}fillBatchSubjectOptions();{% endif %}
+      applyFilters();
+    });
+  }
+
+  $("#btn-refresh").on("click", function(){ GA.spin(this, load()); });
+  $("#f-department, #f-batch, #f-subject, #f-status").on("change", function(){
+    applyFilters();
+    $("#btn-export").attr("href", "{% url 'academics:api_students_export' %}?" +
+      {% if wide %}"scope=all&" +{% endif %}
+      $.param(GA.query({batch:$("#f-batch").val(), subject:$("#f-subject").val()})));
+  });
+
+  $("#edit-form").on("submit", function(e){
+    e.preventDefault();
+    GA.submit($(this), { url:"/manage/api/students/"+$("#edit-id").val()+"/save/",
+      onSuccess:function(){ bootstrap.Modal.getInstance($("#edit-modal")[0]).hide(); load(); }});
+  });
+
+  /* ------------------------------ import ------------------------------ */
+  function renderImport(res){
+    const c = res.data.counts;
+    $("#import-result").removeClass("d-none");
+    $("#import-counts").html(
+      [["Total rows",c.total,"bg-grad-2"],["New",c.created,"bg-grad-3"],
+       ["Updated",c.updated,"bg-grad-1"],["Errors",c.errors,"bg-grad-5"]]
+      .map(x=>'<div class="col-6 col-md-3"><div class="card"><div class="card-body py-2 d-flex align-items-center gap-2">'+
+        '<div class="icon '+x[2]+'" style="width:34px;height:34px;border-radius:9px;display:grid;place-items:center;color:#fff">'+
+        '<i class="fa-solid fa-hashtag fs-12"></i></div><div><div class="fw-bold fs-5 lh-1">'+x[1]+'</div>'+
+        '<small class="text-muted-2 fs-12">'+x[0]+'</small></div></div></div></div>').join(""));
+    GA.table("#import-table", { perPage:10, rows: res.data.rows, columns:[
+      { key:"row", label:"Row", className:"text-center" },
+      { key:"email", label:"Email" },
+      { key:"name", label:"Name" },
+      { key:"batch", label:"Batch" },
+      { key:"guardian_mobile", label:"Guardian", render:v=> v ? GA.esc(v) : '<span class="text-muted-2">—</span>' },
+      { key:"subjects", label:"Subjects", sortable:false, render:v=>(v||[]).map(c=>'<span class="ga-chip">'+GA.esc(c)+'</span>').join("") },
+      { key:"status", label:"Result", render:v=>GA.statusPill(v) },
+      { key:"messages", label:"Notes", sortable:false, render:v=>
+        (v||[]).length ? '<small class="text-danger">'+GA.esc(v.join("; "))+'</small>' : '' }
+    ]});
+  }
+
+  function sendImport(dry){
+    const form = $("#import-form")[0];
+    if(!form.file.value){ GA.toast("Choose a file first.","warn"); return; }
+    const fd = new FormData(form);
+    if(dry) fd.append("dry_run","1");
+    const $btn = dry ? $("#btn-preview") : $("#btn-import");
+    GA.btnBusy($btn, true, dry ? "Checking…" : "Importing…");
+    GA.post("{% url 'academics:api_students_import' %}", fd)
+      .done(function(res){
+        renderImport(res);
+        GA.toast(res.message, res.data.counts.errors ? "warn":"ok");
+        $("#btn-import").prop("disabled", false);
+        if(!dry){ $("#btn-import").prop("disabled", true); load(); }
+      })
+      .always(()=> GA.btnBusy($btn,false));
+  }
+  $("#btn-preview").on("click", ()=> sendImport(true));
+  $("#btn-import").on("click", ()=> sendImport(false));
+  $('#import-form input[type=file]').on("change", function(){ $("#btn-import").prop("disabled", true); $("#import-result").addClass("d-none"); });
+
+  $("#history-modal").on("shown.bs.modal", function(){
+    GA.get("{% url 'academics:api_import_jobs' %}").done(function(res){
+      GA.table("#history-table",{ perPage:8, rows:res.data.rows, columns:[
+        { key:"created_at", label:"When" },
+        { key:"file_name", label:"File" },
+        { key:"uploaded_by", label:"By" },
+        { key:"total", label:"Rows", className:"text-center" },
+        { key:"created", label:"New", className:"text-center" },
+        { key:"updated", label:"Updated", className:"text-center" },
+        { key:"errors", label:"Errors", className:"text-center" },
+        { key:"status", label:"Status", render:v=>GA.statusPill(v==="SUCCESS"?"active":v==="PARTIAL"?"PENDING":"REVOKED") }
+      ]});
+    });
+  });
+
+  $("#unlink-go").on("click", function(){
+    const $btn = $(this), id = $btn.attr("data-id");
+    // Belt and braces: without an id the URL becomes .../undefined/ and the
+    // server answers 404, which reads to the user as "unlinking is broken".
+    if(!id){ GA.toast("Could not tell which student that was — reopen the row.", "warn"); return; }
+    GA.btnBusy($btn, true, "Unlinking…");
+    GA.post("/manage/api/students/"+id+"/reset-device/", {reason: $("#unlink-reason").val()})
+      .done(function(){
+        bootstrap.Modal.getInstance($("#unlink-modal")[0]).hide();
+        load();
+      })
+      .always(()=> GA.btnBusy($btn, false));
+  });
+
+  function fillBatchSubjectOptions(){
+    // api_lookups is scoped to what the viewer *teaches*, which is right for
+    // "My students" but far too narrow for the institute-wide screen. There,
+    // build the lists from the rows on show so the filters can always reach
+    // every row.
+    {% if wide %}
+    const batches = {}, subjects = {};
+    rows.forEach(function(r){
+      if(r.batch_id) batches[r.batch_id] = r.batch;
+      (r.subjects||[]).forEach(c=>{ subjects[c] = c; });
+    });
+    const keepB = $("#f-batch").val(), keepS = $("#f-subject").val();
+    $("#f-batch").html('<option value="">All batches</option>'+
+      Object.keys(batches).sort((a,b)=>batches[a]<batches[b]?-1:1)
+        .map(id=>'<option value="'+id+'">'+GA.esc(batches[id])+'</option>').join("")).val(keepB);
+    $("#f-subject").html('<option value="">All subjects</option>'+
+      Object.keys(subjects).sort()
+        .map(c=>'<option value="'+GA.esc(c)+'">'+GA.esc(c)+'</option>').join("")).val(keepS);
+    {% else %}
+    $("#f-batch").append(lookups.batches.map(b=>'<option value="'+b.id+'">'+GA.esc(b.label)+'</option>').join(""));
+    $("#f-subject").append(lookups.subjects.map(s=>'<option value="'+s.id+'">'+GA.esc(s.code)+' — '+GA.esc(s.name)+'</option>').join(""));
+    {% endif %}
+  }
+
+  GA.get("{% url 'academics:api_lookups' %}").done(function(res){
+    lookups = res.data;
+    {% if not wide %}fillBatchSubjectOptions();{% endif %}
+    load();
+  });
+});
+</script>
+{% endblock %}

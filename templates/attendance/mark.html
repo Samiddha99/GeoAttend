@@ -1,0 +1,152 @@
+{% extends "layouts/base.html" %}
+{% block title %}Mark attendance · {{ SITE_NAME }}{% endblock %}
+{% block body_class %}bg-light{% endblock %}
+
+{% block body %}
+<div class="ga-mark">
+  <div class="ga-mark-card">
+
+    <div class="ga-mark-head ga-gradient" id="head">
+      <div class="ga-mark-icon ga-pulse" id="head-icon"><i class="fa-solid fa-location-crosshairs"></i></div>
+      <h4 class="fw-bold mb-1" id="head-title">Checking you in…</h4>
+      <p class="mb-0 opacity-75 fs-13" id="head-sub">Please allow location access when prompted.</p>
+    </div>
+
+    <div class="p-4">
+      {% if not session %}
+        <div class="alert alert-danger mb-0">
+          <i class="fa-solid fa-link-slash me-2"></i>This attendance link is not valid.
+        </div>
+      {% elif not_student %}
+        <div class="alert alert-warning mb-0">
+          <i class="fa-solid fa-user-lock me-2"></i>
+          You are signed in as <b>{{ user.email }}</b>, which is not a student account.
+          Attendance can only be marked from a student login.
+        </div>
+      {% else %}
+        <div class="row g-2 mb-3 fs-13">
+          <div class="col-6"><div class="text-muted-2">Subject</div>
+            <div class="fw-600">{{ session.subject.code }} — {{ session.subject.name }}</div></div>
+          <div class="col-6"><div class="text-muted-2">Batch</div>
+            <div class="fw-600">{{ session.batch.label }}</div></div>
+          <div class="col-6"><div class="text-muted-2">Teacher</div>
+            <div class="fw-600">{{ session.teacher.get_full_name }}</div></div>
+          <div class="col-6"><div class="text-muted-2">Student</div>
+            <div class="fw-600">{{ user.get_full_name }}</div></div>
+        </div>
+
+        <div id="state-box"></div>
+
+        <div class="mt-3 d-grid gap-2" id="actions"></div>
+
+        <hr>
+        <div class="d-flex align-items-center justify-content-between fs-12 text-muted-2">
+          <span><i class="fa-solid fa-shield-halved me-1"></i>Geo-fence {{ session.radius_m }} m</span>
+          <span id="expiry-note">{% if session.is_open %}Closes in <b class="ga-countdown" id="cd"></b>{% else %}Closed{% endif %}</span>
+        </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+{% if session and not not_student %}
+<script>
+$(function(){
+  const isOpen = {{ session.is_open|yesno:"true,false" }};
+  const already = {{ already|yesno:"true,false" }};
+  const secondsLeft = {{ session.seconds_left }};
+
+  function head(cls, icon, title, sub){
+    $("#head").attr("class","ga-mark-head "+cls);
+    $("#head-icon").html('<i class="fa-solid '+icon+'"></i>').removeClass("ga-pulse");
+    $("#head-title").text(title);
+    $("#head-sub").text(sub);
+  }
+  const okHead   = ()=> head("ga-mark-head","fa-circle-check","Attendance marked","You're all set — see you next class.");
+  const errHead  = (t,s)=> head("ga-mark-head","fa-circle-xmark",t,s);
+
+  $("#head").css("background","linear-gradient(135deg,#4f46e5,#06b6d4)");
+
+  function success(d){
+    $("#head").css("background","linear-gradient(135deg,#10b981,#059669)");
+    okHead();
+    $("#state-box").html(
+      '<div class="alert alert-success mb-0"><div class="fw-bold mb-1"><i class="fa-solid fa-circle-check me-2"></i>Present</div>'+
+      '<div class="fs-13">'+GA.esc(d.student)+' · '+GA.esc(d.subject)+'</div>'+
+      '<div class="fs-13 text-muted-2">Marked at '+GA.esc(d.marked_at)+
+      (d.distance_m!=null ? ' · '+d.distance_m+' m from the teacher' : '')+'</div></div>');
+    $("#actions").html('<a href="{% url "attendance:my_attendance" %}" class="btn btn-primary">'+
+      '<i class="fa-solid fa-chart-simple me-2"></i>View my attendance</a>');
+  }
+
+  function failure(msg, code){
+    $("#head").css("background","linear-gradient(135deg,#ef4444,#e11d48)");
+    errHead(code==="OUT_OF_RANGE" ? "You are not in the class" : "Could not mark attendance", "");
+    $("#head-sub").text("");
+    $("#state-box").html('<div class="alert alert-danger mb-0"><i class="fa-solid fa-triangle-exclamation me-2"></i>'+GA.esc(msg)+'</div>');
+    const retryable = ["OUT_OF_RANGE","NO_LOCATION","LOW_ACCURACY"].indexOf(code) > -1;
+    $("#actions").html(retryable
+      ? '<button class="btn btn-primary" id="retry"><i class="fa-solid fa-rotate me-2"></i>Try again</button>'
+      : '<a href="/app/" class="btn btn-light">Go to dashboard</a>');
+    $("#retry").on("click", attempt);
+  }
+
+  // Same bar the server enforces. The |default matters: a missing context key
+  // would render `const MAX_ACCURACY = ;`, a syntax error that kills this whole
+  // script block — and with it the student's ability to mark at all.
+  const MAX_ACCURACY = {{ max_accuracy_m|default:100 }};
+
+  function attempt(){
+    $("#state-box").html('<div class="text-center py-3"><div class="ga-spinner mx-auto mb-3"></div>'+
+      '<div class="fw-600">Verifying your location…</div>'+
+      '<small class="text-muted-2">Stay inside the classroom while we check.</small>'+
+      '<div class="fs-13 text-muted-2 mt-2" id="acc-note">Waiting for a GPS fix…</div></div>');
+    $("#actions").empty();
+
+    // Refine rather than grabbing the first fix: phones report a coarse
+    // WiFi/cell position within a second and only reach GPS precision later.
+    GA.location({
+      timeout: 20000,
+      desiredAccuracy: MAX_ACCURACY,
+      onProgress: function(fix){
+        const good = fix.accuracy <= MAX_ACCURACY;
+        $("#acc-note")
+          .toggleClass("text-success", good)
+          .text(good
+            ? "Accuracy ±" + Math.round(fix.accuracy) + " m — good, submitting…"
+            : "Accuracy ±" + Math.round(fix.accuracy) + " m — sharpening, need ±" +
+              MAX_ACCURACY + " m or better…");
+      }
+    }).done(function(pos){
+      GA.post("{% url 'attendance:api_mark' token=token %}", {
+        latitude: pos.latitude, longitude: pos.longitude, accuracy: pos.accuracy,
+        device_hash: GA.deviceHash()
+      }, {quiet:true})
+        .done(function(res){ success(res.data); })
+        .fail(function(xhr){
+          const r = (xhr && xhr.responseJSON) || {};
+          failure(r.message || "Something went wrong.", r.code);
+        });
+    }).fail(function(err){ failure(err.message, "NO_LOCATION"); });
+  }
+
+  if (already) {
+    $("#head").css("background","linear-gradient(135deg,#10b981,#059669)");
+    okHead();
+    $("#state-box").html('<div class="alert alert-success mb-0"><i class="fa-solid fa-circle-check me-2"></i>'+
+      'Your attendance for this class was already marked.</div>');
+    $("#actions").html('<a href="{% url "attendance:my_attendance" %}" class="btn btn-primary">View my attendance</a>');
+  } else if (!isOpen) {
+    failure("This attendance link has expired or was closed by the teacher.", "EXPIRED");
+  } else {
+    if (secondsLeft > 0) GA.countdown($("#cd"), secondsLeft, function(){
+      $("#expiry-note").html('<span class="text-danger">Closed</span>');
+    });
+    attempt();
+  }
+});
+</script>
+{% endif %}
+{% endblock %}

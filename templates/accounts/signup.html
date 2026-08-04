@@ -1,0 +1,235 @@
+{% extends "layouts/base.html" %}
+{% block title %}Register your institute · {{ SITE_NAME }}{% endblock %}
+{% block body %}
+<div class="ga-auth">
+  {% include "partials/auth_visual.html" %}
+  <div class="ga-auth-form">
+    <div class="ga-auth-box wide">
+
+      <div class="ga-steps">
+        <div class="ga-step active" data-step="1"><div class="bar"></div><div class="cap">Institute</div></div>
+        <div class="ga-step" data-step="2"><div class="bar"></div><div class="cap">Head account</div></div>
+        <div class="ga-step" data-step="3"><div class="bar"></div><div class="cap">Verify email</div></div>
+      </div>
+
+      <form id="signup-form" novalidate>
+        {% csrf_token %}
+
+        <!-- step 1 -->
+        <div class="step-pane" data-pane="1">
+          <h4 class="fw-bold mb-1">Tell us about your institute</h4>
+          <p class="text-muted-2 mb-4">You are creating the top-level account. You'll invite your HoDs next.</p>
+          <div class="row g-3">
+            <div class="col-md-8 mb-0">
+              <label class="form-label">Institute name *</label>
+              <input class="form-control" name="institute_name" placeholder="National Institute of Technology" required>
+            </div>
+            <div class="col-md-4 mb-0">
+              <label class="form-label">Institute code *</label>
+              <input class="form-control text-uppercase" name="institute_code" placeholder="NIT" required>
+            </div>
+            <div class="col-md-6 mb-0">
+              <label class="form-label">Official institute email *</label>
+              <input type="email" class="form-control" name="institute_email" placeholder="office@nit.edu.in" required>
+            </div>
+            <div class="col-md-6 mb-0">
+              <label class="form-label">Institute phone</label>
+              <input class="form-control" name="phone" placeholder="+91 33 1234 5678">
+            </div>
+            <div class="col-md-6 mb-0">
+              <label class="form-label">Website</label>
+              <input type="url" class="form-control" name="website" placeholder="https://nit.edu.in">
+            </div>
+            <div class="col-md-6 mb-0">
+              <label class="form-label">Address</label>
+              <textarea class="form-control" name="address" rows="1" placeholder="City, State"></textarea>
+            </div>
+          </div>
+          <button type="button" class="btn btn-primary w-100 mt-4 btn-lg" data-next="2">
+            Continue <i class="fa-solid fa-arrow-right ms-2"></i>
+          </button>
+        </div>
+
+        <!-- step 2 -->
+        <div class="step-pane d-none" data-pane="2">
+          <h4 class="fw-bold mb-1">Your head-of-institute login</h4>
+          <p class="text-muted-2 mb-4">We'll email a 6-digit code to this address to verify it.</p>
+          <div class="row g-3">
+            <div class="col-md-6 mb-0">
+              <label class="form-label">Your full name *</label>
+              <input class="form-control" name="head_name" placeholder="Dr. A. Banerjee" required>
+            </div>
+            <div class="col-md-6 mb-0">
+              <label class="form-label">Your phone</label>
+              <input class="form-control" name="head_phone" placeholder="+91 90000 00000">
+            </div>
+            <div class="col-12 mb-0">
+              <label class="form-label">Your email (this is your login) *</label>
+              <input type="email" class="form-control" name="head_email" placeholder="principal@nit.edu.in" required>
+              <div class="form-text" id="email-hint"></div>
+            </div>
+            <div class="col-md-6 mb-0">
+              <label class="form-label">Password *</label>
+              <input type="password" class="form-control" name="password1" required>
+              <div class="ga-bar mt-2"><span id="pw-meter" style="width:0"></span></div>
+            </div>
+            <div class="col-md-6 mb-0">
+              <label class="form-label">Confirm password *</label>
+              <input type="password" class="form-control" name="password2" required>
+            </div>
+          </div>
+          <div class="d-flex gap-2 mt-4">
+            <button type="button" class="btn btn-light btn-lg" data-back="1"><i class="fa-solid fa-arrow-left"></i></button>
+            <button type="submit" class="btn btn-primary btn-lg flex-grow-1">
+              <i class="fa-solid fa-paper-plane me-2"></i>Send verification code
+            </button>
+          </div>
+        </div>
+      </form>
+
+      <!-- step 3 -->
+      <div class="step-pane d-none" data-pane="3">
+        <div class="text-center mb-4">
+          <div class="ga-avatar lg mx-auto mb-3"><i class="fa-solid fa-envelope-open-text"></i></div>
+          <h4 class="fw-bold mb-1">Check your inbox</h4>
+          <p class="text-muted-2 mb-0">We sent a 6-digit code to <b id="otp-email"></b></p>
+        </div>
+        <form id="otp-form">
+          {% csrf_token %}
+          <div class="otp-group mb-4">
+            <input inputmode="numeric" maxlength="1" autocomplete="one-time-code">
+            <input inputmode="numeric" maxlength="1"><input inputmode="numeric" maxlength="1">
+            <input inputmode="numeric" maxlength="1"><input inputmode="numeric" maxlength="1">
+            <input inputmode="numeric" maxlength="1">
+          </div>
+          <button class="btn btn-primary w-100 btn-lg" type="submit">
+            <i class="fa-solid fa-circle-check me-2"></i>Verify &amp; create institute
+          </button>
+        </form>
+        <div class="text-center mt-3">
+          <small class="text-muted-2">Didn't get it? <a href="#" id="resend">Resend code</a>
+            <span id="cooldown" class="ms-1"></span></small>
+        </div>
+        <div class="alert alert-info mt-3 d-none fs-13" id="debug-code"></div>
+      </div>
+
+      <div class="text-center mt-4">
+        <small class="text-muted-2">Already registered? <a href="{% url 'accounts:login' %}" class="fw-600">Sign in</a></small>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+$(function(){
+  const $form = $("#signup-form");
+
+  function goto(step){
+    $(".step-pane").addClass("d-none").filter('[data-pane="'+step+'"]').removeClass("d-none");
+    $(".ga-step").each(function(){
+      const s = +$(this).data("step");
+      $(this).toggleClass("active", s === step).toggleClass("done", s < step);
+    });
+    window.scrollTo({top:0, behavior:"smooth"});
+  }
+
+  $("[data-next]").on("click", function(){
+    let ok = true;
+    $('.step-pane[data-pane="1"] [required]').each(function(){
+      const bad = !$(this).val().trim();
+      $(this).toggleClass("is-invalid", bad);
+      if (bad) ok = false;
+    });
+    if (!ok) { GA.toast("Please fill the required fields.", "warn"); return; }
+    goto(2);
+  });
+  $("[data-back]").on("click", function(){ goto(+$(this).data("back")); });
+
+  // live password strength
+  $('input[name=password1]').on("input", function(){
+    const v = $(this).val();
+    let score = Math.min(100, v.length * 8 + (/[A-Z]/.test(v)?18:0) + (/[0-9]/.test(v)?18:0) + (/[^A-Za-z0-9]/.test(v)?22:0));
+    $("#pw-meter").css({width: score+"%", background: score>75?"#10b981":score>45?"#f59e0b":"#ef4444", height:"100%", display:"block", borderRadius:"99px"});
+  });
+
+  // live email availability
+  let t = null;
+  $('input[name=head_email]').on("input", function(){
+    const email = $(this).val().trim();
+    clearTimeout(t);
+    if (!email || email.indexOf("@") < 0) { $("#email-hint").text(""); return; }
+    t = setTimeout(function(){
+      GA.get("{% url 'accounts:api_check_email' %}", {email: email}, {quiet:true}).done(function(res){
+        if (res.data.available) $("#email-hint").html('<span class="text-success"><i class="fa-solid fa-check"></i> Available</span>');
+        else $("#email-hint").html('<span class="text-danger"><i class="fa-solid fa-xmark"></i> Already registered — try signing in.</span>');
+      });
+    }, 400);
+  });
+
+  $form.on("submit", function(e){
+    e.preventDefault();
+    GA.submit($form, {
+      url: "{% url 'accounts:api_signup_start' %}",
+      busyText: "Sending code…",
+      onSuccess: function(res){
+        $("#otp-email").text(res.data.email);
+        goto(3);
+        $(".otp-group input").first().trigger("focus");
+        if (res.data.debug_code) $("#debug-code").removeClass("d-none")
+          .html('<b>Dev mode:</b> your code is <b>'+res.data.debug_code+'</b> (emails print to the server console).');
+        startCooldown(60);
+      }
+    });
+  });
+
+  // OTP box behaviour
+  const $boxes = $(".otp-group input");
+  $boxes.on("input", function(){
+    this.value = this.value.replace(/\D/g,"");
+    if (this.value) $(this).next("input").trigger("focus");
+  }).on("keydown", function(e){
+    if (e.key === "Backspace" && !this.value) $(this).prev("input").trigger("focus");
+  }).on("paste", function(e){
+    const txt = (e.originalEvent.clipboardData.getData("text")||"").replace(/\D/g,"").slice(0,6);
+    txt.split("").forEach((ch,i)=> $boxes.eq(i).val(ch));
+    e.preventDefault();
+    $boxes.eq(Math.min(txt.length,5)).trigger("focus");
+  });
+
+  $("#otp-form").on("submit", function(e){
+    e.preventDefault();
+    const code = $boxes.map(function(){ return this.value; }).get().join("");
+    if (code.length !== 6) { GA.toast("Enter all 6 digits.", "warn"); return; }
+    const $btn = $(this).find('[type=submit]');
+    GA.btnBusy($btn, true, "Verifying…");
+    GA.post("{% url 'accounts:api_signup_verify' %}", {code: code})
+      .done(function(res){ GA.toast(res.message,"ok"); setTimeout(()=>window.location=res.data.redirect, 700); })
+      .always(function(){ GA.btnBusy($btn,false); });
+  });
+
+  let cd = null;
+  function startCooldown(sec){
+    clearInterval(cd);
+    let left = sec;
+    $("#resend").addClass("disabled text-muted-2");
+    cd = setInterval(function(){
+      $("#cooldown").text("(" + left + "s)");
+      if (--left < 0){ clearInterval(cd); $("#cooldown").text(""); $("#resend").removeClass("disabled text-muted-2"); }
+    }, 1000);
+  }
+
+  $("#resend").on("click", function(e){
+    e.preventDefault();
+    if ($(this).hasClass("disabled")) return;
+    $("#resend").addClass("disabled text-muted-2");
+    GA.post("{% url 'accounts:api_signup_resend' %}").done(function(res){
+      GA.toast(res.message, "ok");
+      if (res.data.debug_code) $("#debug-code").removeClass("d-none").html('<b>Dev mode:</b> code is <b>'+res.data.debug_code+'</b>');
+      startCooldown(60);
+    });
+  });
+});
+</script>
+{% endblock %}

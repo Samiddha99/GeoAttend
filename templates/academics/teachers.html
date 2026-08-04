@@ -1,0 +1,336 @@
+{% extends "layouts/app.html" %}
+{% block page_title %}Teachers{% endblock %}
+{% block page_sub %}{% if can_manage %}Invite teachers and allocate subjects. You can see every department; you can only change your own.{% elif is_student %}Who teaches what across the institute.{% else %}Everyone teaching in this institute and the subjects they take.{% endif %}{% endblock %}
+{% block topbar_actions %}
+{% if can_manage %}
+<button class="btn btn-primary btn-sm" id="btn-new"><i class="fa-solid fa-user-plus me-1"></i>Invite teacher</button>
+{% endif %}
+{% endblock %}
+
+{% block content %}
+<div class="card mb-3"><div class="card-body py-3 table-toolbar">
+  <div class="input-group input-group-sm" style="max-width:260px">
+    <span class="input-group-text"><i class="fa-solid fa-magnifying-glass"></i></span>
+    <input class="form-control" id="search" placeholder="Search name or email…">
+  </div>
+  {% comment %}
+  Hidden only in a single-department institute, where it could never filter
+  anything. The table spans the whole institute for every staff role.
+  {% endcomment %}
+  <select class="form-select form-select-sm {% if filter_departments|length < 2 %}d-none{% endif %}"
+          id="f-dept" style="max-width:210px">
+    <option value="">All departments</option>
+    {% for d in filter_departments %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}
+  </select>
+  <select class="form-select form-select-sm" id="f-subject" style="max-width:240px"
+          data-all='[{% for s in filter_subjects %}{"id":"{{ s.id }}","code":"{{ s.code|escapejs }}","name":"{{ s.name|escapejs }}","department_id":"{{ s.department_id }}"}{% if not forloop.last %},{% endif %}{% endfor %}]'>
+    <option value="">All subjects</option>
+    {% for s in filter_subjects %}<option value="{{ s.id }}">{{ s.code }} — {{ s.name }}</option>{% endfor %}
+  </select>
+  <select class="form-select form-select-sm {% if is_student %}d-none{% endif %}"
+          id="f-status" style="max-width:180px">
+    <option value="">Any status</option>
+    <option value="active">Activated</option>
+    <option value="invited">Invited</option>
+    <option value="deactivated">Deactivated</option>
+    <option value="unassigned">No subjects allocated</option>
+  </select>
+  <div class="ms-auto d-flex gap-2">
+    <span class="ga-pill pill-blue" id="count-pill">0 teachers</span>
+    <button class="btn btn-light btn-sm" id="btn-reset-filters" title="Clear filters">
+      <i class="fa-solid fa-filter-circle-xmark"></i></button>
+    <button class="btn btn-light btn-sm" id="btn-refresh"><i class="fa-solid fa-rotate"></i></button>
+  </div>
+</div></div>
+
+<div class="card"><div class="card-body"><div id="tbl"></div></div></div>
+
+{% if can_manage %}
+<!-- invite / edit modal — head and HoD only -->
+<div class="modal fade" id="modal" tabindex="-1"><div class="modal-dialog modal-lg modal-dialog-centered">
+  <div class="modal-content"><form id="form">{% csrf_token %}
+    <div class="modal-header">
+      <h5 class="modal-title"><i class="fa-solid fa-chalkboard-user me-2 text-primary"></i><span id="mtitle">Invite a teacher</span></h5>
+      <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+    <div class="modal-body">
+      <input type="hidden" id="teacher-id">
+      <div class="row g-3 mb-3" id="identity-block">
+        <div class="col-md-5 mb-0"><label class="form-label">Teacher email *</label>
+          <input type="email" class="form-control" name="email" id="f-email"
+                 placeholder="teacher@college.edu" required>
+          <div class="form-text d-none" id="email-locked">
+            The email identifies the account and cannot be changed.</div></div>
+        <div class="col-md-4 mb-0"><label class="form-label">Full name</label>
+          <input class="form-control" name="full_name" placeholder="Optional — they can set it"></div>
+        <div class="col-md-3 mb-0"><label class="form-label">Mobile</label>
+          <input class="form-control" name="phone"></div>
+        {% if user.is_head %}
+        <div class="col-md-6 mb-0"><label class="form-label">Department *</label>
+          <select class="form-select" name="department" id="dept-select" required>
+            {% for d in departments %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}
+          </select>
+          <div class="form-text d-none" id="dept-move-note">
+            Moving a teacher to another department retires their current
+            subject allocations.</div></div>
+        {% else %}
+        <div class="col-md-6 mb-0"><label class="form-label">Department</label>
+          <input class="form-control" value="{{ departments.0.name }}" disabled>
+          <div class="form-text">Only the head of the institute can move a teacher
+            between departments.</div></div>
+        {% endif %}
+      </div>
+
+      <hr>
+      <h6 class="fw-bold mb-2"><i class="fa-solid fa-list-check me-2 text-muted-2"></i>Subject allocation</h6>
+      <p class="text-muted-2 fs-13">Pick a batch, then tick the subjects this teacher will take for it. Repeat for as many batches as you need.</p>
+
+      <div class="row g-2 align-items-end mb-3">
+        <div class="col-md-5">
+          <label class="form-label">Batch</label>
+          <select class="form-select form-select-sm" id="pick-batch"><option value="">Select batch…</option></select>
+        </div>
+        <div class="col-md-7">
+          <label class="form-label">Subjects</label>
+          <div id="pick-subjects" class="border rounded-3 p-2 ga-scroll-y" style="min-height:52px">
+            <small class="text-muted-2">Choose a batch first.</small>
+          </div>
+        </div>
+      </div>
+
+      <div class="border rounded-3 p-2" style="background:#f8fafc">
+        <div class="fs-12 text-muted-2 fw-600 mb-1">SELECTED ALLOCATIONS</div>
+        <div id="chips"><small class="text-muted-2">Nothing selected yet.</small></div>
+      </div>
+      <div class="invalid-feedback d-block" id="assign-error"></div>
+    </div>
+    <div class="modal-footer">
+      <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+      <button type="submit" class="btn btn-primary"><i class="fa-solid fa-paper-plane me-1"></i><span id="submit-label">Send invitation</span></button>
+    </div>
+  </form></div>
+</div></div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+$(function(){
+  const CAN_MANAGE = {{ can_manage|yesno:"true,false" }};
+  let table=null, rows=[], lookups={batches:[],subjects:[]}, selected=[], editingId=null;
+  // Teachers get a read-only directory, so the modal is not rendered for them.
+  const modal = CAN_MANAGE ? new bootstrap.Modal("#modal") : null;
+
+  const cols = [
+    { key:"full_name", label:"Teacher", render:(v,r)=>
+      '<div class="d-flex align-items-center gap-2">'+GA.avatar(v)+
+      '<div><div class="fw-600">'+GA.esc(v)+'</div><small class="text-muted-2">'+GA.esc(r.email)+'</small></div></div>' },
+    { key:"department", label:"Department" },
+    {% if show_mobile %}
+    { key:"phone", label:"Mobile", render:(v,r)=>GA.phone(r.phone_dial) },
+    {% endif %}
+    { key:"assignments", label:"Subjects · batches", sortable:false,
+      csv:v=>(v||[]).map(a=>a.subject.split(" — ")[0]+" · "+a.batch).join(", "),
+      render:function(v){
+        if(!v.length) return '<span class="text-muted-2">None</span>';
+        return v.map(a=>'<span class="ga-chip">'+GA.esc(a.subject.split(" — ")[0])+' · '+GA.esc(a.batch)+'</span>').join("");
+      } },
+    {% if not is_student %}
+    { key:"status", label:"Status", render:v=>GA.statusPill(v) },
+    {% endif %}
+    {% if can_manage %}
+    { key:"id", label:"", sortable:false, className:"text-end", render:function(v,r){
+        // Rows outside your own department are visible but not actionable.
+        // A lock label replaces the buttons rather than showing disabled ones:
+        // a disabled button still invites a click, and the tooltip explains who
+        // to ask instead.
+        if(!r.can_edit){
+          return '<span class="text-muted-2 fs-12" title="'+GA.esc(r.department)+
+            ' is not your department — only its HoD or the head can change this teacher.">'+
+            '<i class="fa-solid fa-lock me-1"></i>read-only</span>';
+        }
+        return '<div class="btn-group btn-group-sm">'+
+          '<button class="btn btn-light edit" data-id="'+v+'" title="Edit teacher"><i class="fa-solid fa-pen"></i></button>'+
+          (r.invitation_id ? '<button class="btn btn-light resend" data-inv="'+r.invitation_id+'" title="Resend invite"><i class="fa-solid fa-paper-plane"></i></button>':'')+
+          '<button class="btn btn-light '+(r.is_active?'text-danger':'text-success')+' toggle" data-id="'+v+'" title="'+(r.is_active?'Deactivate':'Activate')+'"><i class="fa-solid fa-'+(r.is_active?'user-slash':'user-check')+'"></i></button>'+
+          '</div>';
+      } }
+    {% endif %}
+  ];
+
+  function renderChips(){
+    if(!selected.length){ $("#chips").html('<small class="text-muted-2">Nothing selected yet.</small>'); return; }
+    $("#chips").html(selected.map(function(s,i){
+      return '<span class="ga-chip">'+GA.esc(s.subject_code)+' · '+GA.esc(s.batch_label)+
+        ' <i class="fa-solid fa-xmark x" data-i="'+i+'"></i></span>';
+    }).join(""));
+    $("#chips .x").on("click", function(){ selected.splice($(this).data("i"),1); renderChips(); refreshSubjectTicks(); });
+  }
+
+  function deptId(){ return $("#dept-select").length ? $("#dept-select").val() : (lookups.departments[0]||{}).id; }
+
+  function fillBatches(){
+    const d = deptId();
+    const opts = lookups.batches.filter(b=>!d || b.department_id == d)
+      .map(b=>'<option value="'+b.id+'" data-label="'+GA.esc(b.label)+'">'+GA.esc(b.label)+'</option>').join("");
+    $("#pick-batch").html('<option value="">Select batch…</option>'+opts);
+    $("#pick-subjects").html('<small class="text-muted-2">Choose a batch first.</small>');
+  }
+
+  function refreshSubjectTicks(){
+    const bid = $("#pick-batch").val();
+    $("#pick-subjects input[type=checkbox]").each(function(){
+      const sid = $(this).val();
+      $(this).prop("checked", selected.some(s => s.subject_id == sid && s.batch_id == bid));
+    });
+  }
+
+  $("#pick-batch").on("change", function(){
+    const bid = $(this).val(), d = deptId();
+    if(!bid){ $("#pick-subjects").html('<small class="text-muted-2">Choose a batch first.</small>'); return; }
+    const subs = lookups.subjects.filter(s=>!d || s.department_id == d);
+    if(!subs.length){ $("#pick-subjects").html('<small class="text-danger">No subjects in this department yet.</small>'); return; }
+    $("#pick-subjects").html(subs.map(s=>
+      '<div class="form-check"><input class="form-check-input sub-cb" type="checkbox" value="'+s.id+
+      '" id="sub'+s.id+'" data-code="'+GA.esc(s.code)+'"><label class="form-check-label fs-13" for="sub'+s.id+'">'+
+      GA.esc(s.code)+' — '+GA.esc(s.name)+'</label></div>').join(""));
+    refreshSubjectTicks();
+    $(".sub-cb").on("change", function(){
+      const sid = $(this).val(), code = $(this).data("code");
+      const blabel = $("#pick-batch option:selected").data("label");
+      if(this.checked){
+        if(!selected.some(s=>s.subject_id==sid && s.batch_id==bid))
+          selected.push({subject_id:sid, batch_id:bid, subject_code:code, batch_label:blabel});
+      } else {
+        selected = selected.filter(s=>!(s.subject_id==sid && s.batch_id==bid));
+      }
+      renderChips();
+    });
+  });
+
+  function bind(){
+    $("#tbl").off("click", ".edit").on("click", ".edit", function(){
+      const r = rows.find(x=>x.id==$(this).attr("data-id"));
+      if(!r || !r.can_edit) return;
+      editingId = r.id;
+      $("#mtitle").text("Edit "+(r.full_name||r.email));
+      $("#submit-label").text("Save changes");
+      // Identity stays visible when editing — name, mobile and (for the head)
+      // department are all editable. Email is the account key, so it is shown
+      // for context but locked.
+      $("#identity-block").removeClass("d-none");
+      $("#f-email").val(r.email).prop("readonly", true).prop("required", false);
+      $("#email-locked").removeClass("d-none");
+      $('#form [name=full_name]').val(r.full_name === "(awaiting registration)" ? "" : r.full_name);
+      $('#form [name=phone]').val(r.phone || "");
+      if($("#dept-select").length){
+        $("#dept-select").val(r.department_id);
+        $("#dept-move-note").removeClass("d-none");
+      }
+      selected = r.assignments.map(a=>({subject_id:a.subject_id, batch_id:a.batch_id,
+        subject_code:a.subject.split(" — ")[0], batch_label:a.batch}));
+      fillBatches(); renderChips(); modal.show();
+    });
+    $("#tbl").off("click", ".resend").on("click", ".resend", function(){
+      GA.post("/manage/api/invitations/"+$(this).data("inv")+"/resend/");
+    });
+    $("#tbl").off("click", ".toggle").on("click", ".toggle", function(){
+      const id=$(this).attr("data-id");
+      const row = rows.find(x=>x.id==id);
+      if(!row || !row.can_edit) return;
+      GA.confirm({title:"Change this teacher's access?", body:"Deactivated teachers can't sign in or take attendance.", variant:"warning", icon:"fa-user-slash"})
+        .done(()=> GA.post("/manage/api/teachers/"+id+"/toggle/").done(load));
+    });
+  }
+
+  /* ---------------------------------------------------------- filtering */
+  // The full, role-scoped subject list is rendered into data-all by the view.
+  // It deliberately does not come from api_lookups: for a teacher that endpoint
+  // returns only the subjects they personally teach, which would make the
+  // filter useless for finding a colleague who teaches something else.
+  const ALL_SUBJECTS = JSON.parse($("#f-subject").attr("data-all") || "[]");
+
+  function fillSubjectOptions(){
+    const d = $("#f-dept").val();
+    const keep = $("#f-subject").val();
+    const subs = ALL_SUBJECTS.filter(s=>!d || s.department_id == d);
+    $("#f-subject").html('<option value="">All subjects</option>'+
+      subs.map(s=>'<option value="'+s.id+'">'+GA.esc(s.code)+' — '+GA.esc(s.name)+'</option>').join(""));
+    // Keep the chosen subject selected if it still belongs to the department.
+    if(keep && subs.some(s=>s.id == keep)) $("#f-subject").val(keep);
+  }
+
+  function applyFilters(){
+    const d = $("#f-dept").val(), sid = $("#f-subject").val(), st = $("#f-status").val();
+    const view = rows.filter(function(r){
+      if(d && r.department_id != d) return false;
+      // Subject match is against the teacher's live allocations, so a teacher
+      // only appears if they actually teach that subject somewhere.
+      if(sid && !(r.assignments||[]).some(a=>a.subject_id == sid)) return false;
+      if(st === "deactivated") return !r.is_active;
+      if(st === "unassigned")  return !(r.assignments||[]).length;
+      // Activated/Invited describe registration, which is independent of being
+      // deactivated — exclude deactivated accounts so the two read as distinct.
+      if(st) return r.status === st && r.is_active;
+      return true;
+    });
+    if(!table) table = GA.table("#tbl",{ csvName:"teachers",columns:cols, rows:view, search:"#search",
+      empty:"No teachers match these filters."});
+    else table.setRows(view);
+    $("#count-pill").text(view.length + (view.length === 1 ? " teacher" : " teachers"));
+    bind();
+  }
+
+  function load(){
+    GA.loading("#tbl", {rows:8, cols:5});
+    return GA.get("{% url 'academics:api_teachers' %}").done(function(res){
+      rows = res.data.rows;
+      applyFilters();
+    });
+  }
+
+  $("#btn-new").on("click", function(){
+    editingId = null; selected = [];
+    $("#form")[0].reset(); GA.clearErrors($("#form"));
+    $("#mtitle").text("Invite a teacher"); $("#submit-label").text("Send invitation");
+    $("#identity-block").removeClass("d-none");
+    // Undo whatever the edit path locked, or the invite form stays read-only.
+    $("#f-email").prop("readonly", false).prop("required", true);
+    $("#email-locked, #dept-move-note").addClass("d-none");
+    fillBatches(); renderChips(); modal.show();
+  });
+  $("#btn-refresh").on("click", function(){ GA.spin(this, load()); });
+  $(document).on("change", "#dept-select", fillBatches);
+
+  // Filtering is client-side: the rows are already loaded, so re-filtering is
+  // instant and does not cost a round trip.
+  $("#f-dept").on("change", function(){ fillSubjectOptions(); applyFilters(); });
+  $("#f-subject, #f-status").on("change", applyFilters);
+  $("#btn-reset-filters").on("click", function(){
+    $("#f-dept, #f-subject, #f-status").val("");
+    $("#search").val("").trigger("input");
+    fillSubjectOptions(); applyFilters();
+  });
+
+  $("#form").on("submit", function(e){
+    e.preventDefault();
+    $("#assign-error").text("");
+    if(!selected.length){ $("#assign-error").text("Select at least one subject and batch."); return; }
+    const fd = new FormData(this);
+    fd.append("assignments", JSON.stringify(selected.map(s=>({subject_id:s.subject_id, batch_id:s.batch_id}))));
+    const url = editingId ? "/manage/api/teachers/"+editingId+"/assignments/" : "{% url 'academics:api_teacher_invite' %}";
+    const $btn = $(this).find("[type=submit]"); GA.btnBusy($btn, true, "Saving…");
+    GA.post(url, fd, {quiet:true})
+      .done(function(res){ GA.toast(res.message,"ok"); modal.hide(); load(); })
+      .fail(function(xhr){ const r=(xhr&&xhr.responseJSON)||{}; GA.showErrors($("#form"), r.errors, r.message); })
+      .always(()=> GA.btnBusy($btn,false));
+  });
+
+  fillSubjectOptions();
+  if(!CAN_MANAGE){ load(); return; }   // nothing below applies to a teacher
+
+  GA.get("{% url 'academics:api_lookups' %}").done(function(res){
+    lookups = res.data; fillBatches(); load();
+  });
+});
+</script>
+{% endblock %}

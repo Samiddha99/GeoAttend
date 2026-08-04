@@ -1,0 +1,5 @@
+User-Agent: *
+
+Disallow: /contact-me/
+
+Sitemap: https://geoattend.fly.dev/sitemap.xml

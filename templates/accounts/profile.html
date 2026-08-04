@@ -1,0 +1,184 @@
+{% extends "layouts/app.html" %}
+{% block page_title %}Profile &amp; security{% endblock %}
+{% block page_sub %}Manage your details, password and device binding.{% endblock %}
+
+{% block content %}
+<div class="row g-3">
+  <div class="col-lg-4">
+    <div class="card">
+      <div class="card-body text-center">
+        <div class="ga-avatar lg mx-auto mb-3">{{ user.initials }}</div>
+        <h5 class="fw-bold mb-0">{{ user.get_full_name }}</h5>
+        <div class="text-muted-2 fs-13">{{ user.email }}</div>
+        <div class="mt-3 d-flex flex-wrap gap-1 justify-content-center">
+          <span class="ga-pill pill-violet">{{ user.get_role_display }}</span>
+          {% if user.institute %}<span class="ga-pill pill-blue">{{ user.institute.code }}</span>{% endif %}
+          {% if user.department %}<span class="ga-pill pill-grey">{{ user.department.code }}</span>{% endif %}
+        </div>
+        <hr>
+        <div class="row text-start fs-13 g-2">
+          <div class="col-6"><div class="text-muted-2">Joined</div><div class="fw-600">{{ user.date_joined|date:"d M Y" }}</div></div>
+          <div class="col-6"><div class="text-muted-2">Last seen</div><div class="fw-600">{{ user.last_seen|date:"d M, H:i"|default:"—" }}</div></div>
+        </div>
+      </div>
+    </div>
+
+    {% if student_profile %}
+    <div class="card mt-3">
+      <div class="card-header"><i class="fa-solid fa-graduation-cap me-2 text-muted-2"></i>Academic record</div>
+      <div class="card-body">
+        <div class="row g-2 fs-13">
+          <div class="col-6"><div class="text-muted-2">Roll number</div>
+            <div class="fw-600">{{ student_profile.class_roll|default:"—" }}</div></div>
+          <div class="col-6"><div class="text-muted-2">Batch</div>
+            <div class="fw-600">{{ student_profile.batch.label }}</div></div>
+          <div class="col-12"><div class="text-muted-2">Department</div>
+            <div class="fw-600">{{ student_profile.department.name }}</div></div>
+          <div class="col-12"><div class="text-muted-2">Enrolled subjects</div>
+            <div>{% for e in student_profile.enrollments.all %}{% if e.is_active %}
+              <span class="ga-chip">{{ e.subject.code }}</span>{% endif %}{% empty %}
+              <span class="text-muted-2">None</span>{% endfor %}</div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card mt-3">
+      <div class="card-header"><i class="fa-brands fa-whatsapp me-2 text-success"></i>Guardian contact</div>
+      <div class="card-body">
+        <div class="row g-2 fs-13">
+          <div class="col-12"><div class="text-muted-2">Guardian name</div>
+            <div class="fw-600">{{ student_profile.guardian_name|default:"—" }}</div></div>
+          <div class="col-12"><div class="text-muted-2">WhatsApp number</div>
+            {% if student_profile.guardian_mobile %}
+              <div class="fw-600">{{ student_profile.guardian_mobile }}</div>
+            {% else %}
+              <span class="ga-pill pill-amber"><i class="fa-solid fa-triangle-exclamation"></i>Not on record</span>
+            {% endif %}</div>
+          {% if student_profile.guardian_email %}
+          <div class="col-12"><div class="text-muted-2">Guardian email</div>
+            <div class="fw-600">{{ student_profile.guardian_email }}</div></div>
+          {% endif %}
+        </div>
+        <div class="alert alert-light border fs-12 mt-3 mb-0">
+          <i class="fa-solid fa-circle-info text-primary me-1"></i>
+          If your attendance drops below your institute's threshold, an alert may be sent to
+          this number. Contact your department office to correct these details — they are
+          maintained by your institute and can't be edited here.
+        </div>
+      </div>
+    </div>
+    {% endif %}
+
+    {% if user.is_student %}
+    <div class="card mt-3">
+      <div class="card-header"><i class="fa-solid fa-mobile-screen me-2 text-muted-2"></i>Device binding</div>
+      <div class="card-body">
+        <p class="fs-13 text-muted-2">
+          {% if user.device_id %}
+            Your account is bound to the device you first marked attendance from
+            ({{ user.device_bound_at|date:"d M Y, H:i" }}). This stops proxy attendance.
+          {% else %}
+            No device bound yet — the next device you mark attendance from will be remembered.
+          {% endif %}
+        </p>
+        {% if user.device_id %}
+          {% if can_self_unlink %}
+          <button class="btn btn-soft btn-sm w-100" id="reset-device">
+            <i class="fa-solid fa-rotate me-1"></i>I changed my phone — unlink device</button>
+          {% else %}
+          <div class="alert alert-light border fs-12 mb-0">
+            <i class="fa-solid fa-lock text-primary me-1"></i>
+            <b>Lost or changed your phone?</b> Ask your teacher, HoD or department office to
+            unlink it for you — they can do it in seconds from the Students screen. Only
+            they can release the binding, which is what keeps it worth having.
+          </div>
+          {% endif %}
+        {% endif %}
+      </div>
+    </div>
+    {% endif %}
+  </div>
+
+  <div class="col-lg-8">
+    <div class="card mb-3">
+      <div class="card-header"><i class="fa-solid fa-user-pen me-2 text-muted-2"></i>Personal details</div>
+      <div class="card-body">
+        <form id="profile-form">
+          {% csrf_token %}
+          <div class="row g-3">
+            <div class="col-md-6 mb-0">
+              <label class="form-label">Full name</label>
+              <input class="form-control" name="full_name" value="{{ user.full_name }}">
+            </div>
+            <div class="col-md-6 mb-0">
+              <label class="form-label">Mobile</label>
+              <input class="form-control" name="phone" value="{{ user.phone }}">
+            </div>
+            <div class="col-md-6 mb-0">
+              <label class="form-label">Email (locked)</label>
+              <input class="form-control" value="{{ user.email }}" disabled>
+              <div class="form-text">Your email was set by your institute and can't be changed here.</div>
+            </div>
+            <div class="col-md-6 mb-0">
+              <label class="form-label">Role (locked)</label>
+              <input class="form-control" value="{{ user.get_role_display }}" disabled>
+            </div>
+          </div>
+          <button class="btn btn-primary mt-3" type="submit"><i class="fa-solid fa-check me-1"></i>Save changes</button>
+        </form>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header"><i class="fa-solid fa-lock me-2 text-muted-2"></i>Change password</div>
+      <div class="card-body">
+        <form id="password-form">
+          {% csrf_token %}
+          <div class="row g-3">
+            <div class="col-md-4 mb-0">
+              <label class="form-label">Current password</label>
+              <input type="password" class="form-control" name="current_password" required>
+            </div>
+            <div class="col-md-4 mb-0">
+              <label class="form-label">New password</label>
+              <input type="password" class="form-control" name="password1" required>
+            </div>
+            <div class="col-md-4 mb-0">
+              <label class="form-label">Confirm new password</label>
+              <input type="password" class="form-control" name="password2" required>
+            </div>
+          </div>
+          <button class="btn btn-primary mt-3" type="submit"><i class="fa-solid fa-key me-1"></i>Update password</button>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+$(function(){
+  $("#profile-form").on("submit", function(e){
+    e.preventDefault();
+    GA.submit($(this), { url:"{% url 'accounts:api_profile_update' %}", onSuccess:function(res){
+      $(".ga-side-foot .fw-600, .ga-topbar .fw-600").first().text(res.data.full_name);
+    }});
+  });
+  $("#password-form").on("submit", function(e){
+    e.preventDefault();
+    const $f = $(this);
+    GA.submit($f, { url:"{% url 'accounts:api_change_password' %}", onSuccess:function(){ $f[0].reset(); }});
+  });
+  $("#reset-device").on("click", function(){
+    GA.confirm({
+      title:"Unlink this device?", variant:"warning", icon:"fa-mobile-screen",
+      body:"Your next attendance mark will bind your account to whichever device you use.",
+      confirmText:"Unlink"
+    }).done(function(){
+      GA.post("{% url 'accounts:api_reset_device' %}").done(()=> setTimeout(()=>location.reload(), 900));
+    });
+  });
+});
+</script>
+{% endblock %}

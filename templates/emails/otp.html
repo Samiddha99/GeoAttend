@@ -1,0 +1,9 @@
+{% extends "emails/base_email.html" %}{% block content %}
+<h2 style="margin:0 0 8px;font-size:19px">Your verification code</h2>
+<p style="color:#475569;font-size:14px;margin:0 0 18px">Use this code to {{ purpose }}.</p>
+<div style="text-align:center;margin:22px 0">
+  <div style="display:inline-block;background:#eef2ff;color:#4f46e5;font-size:30px;font-weight:800;
+              letter-spacing:9px;padding:14px 24px;border-radius:12px">{{ code }}</div>
+</div>
+<p style="color:#64748b;font-size:13px">This code expires in <b>{{ ttl }} minutes</b>. If you did not request it, you can ignore this email.</p>
+{% endblock %}

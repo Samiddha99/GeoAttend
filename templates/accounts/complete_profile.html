@@ -1,0 +1,19 @@
+{% extends "layouts/base.html" %}
+{% block title %}Finish registration · {{ SITE_NAME }}{% endblock %}
+{% block body %}
+<div class="ga-auth">
+  {% include "partials/auth_visual.html" %}
+  <div class="ga-auth-form">
+    <div class="ga-auth-box text-center">
+      <div class="ga-avatar lg mx-auto mb-3" style="background:linear-gradient(135deg,#f59e0b,#f97316)">
+        <i class="fa-solid fa-hourglass-half"></i></div>
+      <h4 class="fw-bold">One more step</h4>
+      <p class="text-muted-2">
+        Your account <b>{{ user.email }}</b> hasn't been activated yet. Please open the
+        invitation link emailed to you by your institute to set your password.
+      </p>
+      <a href="{% url 'accounts:logout' %}" class="btn btn-light mt-2">Sign out</a>
+    </div>
+  </div>
+</div>
+{% endblock %}

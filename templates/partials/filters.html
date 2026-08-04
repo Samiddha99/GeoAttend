@@ -1,0 +1,69 @@
+{# Shared report filter bar — every dashboard reuses it #}
+<div class="card mb-3">
+  <div class="card-body py-3">
+    <form id="filter-form" class="row g-2 align-items-end">
+      <div class="col-6 col-md-2">
+        <label class="form-label mb-1">From</label>
+        <input type="date" class="form-control form-control-sm" name="start" id="f-start" value="{{ default_start }}">
+      </div>
+      <div class="col-6 col-md-2">
+        <label class="form-label mb-1">To</label>
+        <input type="date" class="form-control form-control-sm" name="end" id="f-end" value="{{ default_end }}">
+      </div>
+      {% if user.is_head %}
+      <div class="col-6 col-md-2">
+        <label class="form-label mb-1">Department</label>
+        <select class="form-select form-select-sm" name="department" id="f-department">
+          <option value="">All departments</option>
+          {% for d in departments %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}
+        </select>
+      </div>
+      {% endif %}
+      <div class="col-6 col-md-2">
+        <label class="form-label mb-1">Batch</label>
+        <select class="form-select form-select-sm" name="batch" id="f-batch">
+          <option value="">All batches</option>
+          {% for b in batches %}<option value="{{ b.id }}" data-dept="{{ b.department_id }}">{{ b.label }} · {{ b.department.code }}</option>{% endfor %}
+        </select>
+      </div>
+      {% if semesters %}
+      <div class="col-6 col-md-2">
+        <label class="form-label mb-1">Semester</label>
+        <select class="form-select form-select-sm" name="semester" id="f-semester">
+          <option value="">All semesters</option>
+          {% for n in semesters %}<option value="{{ n }}">Semester {{ n }}</option>{% endfor %}
+        </select>
+      </div>
+      {% endif %}
+      <div class="col-6 col-md-2">
+        <label class="form-label mb-1">Subject</label>
+        <select class="form-select form-select-sm" name="subject" id="f-subject">
+          <option value="">All subjects</option>
+          {% for s in subjects %}<option value="{{ s.id }}" data-dept="{{ s.department_id }}" data-sem="{{ s.semester }}">{{ s.code }} — {{ s.name }}</option>{% endfor %}
+        </select>
+      </div>
+      {% if teachers %}
+      <div class="col-6 col-md-2">
+        <label class="form-label mb-1">Teacher</label>
+        <select class="form-select form-select-sm" name="teacher" id="f-teacher">
+          <option value="">All teachers</option>
+          {% for t in teachers %}<option value="{{ t.id }}">{{ t.get_full_name }}</option>{% endfor %}
+        </select>
+      </div>
+      {% endif %}
+      <div class="col-12 col-md-auto d-flex gap-2 pt-1">
+        <button type="submit" class="btn btn-primary btn-sm"><i class="fa-solid fa-filter me-1"></i>Apply</button>
+        <button type="button" class="btn btn-light btn-sm" id="f-reset"><i class="fa-solid fa-rotate-left"></i></button>
+      </div>
+      <div class="col-12">
+        <div class="d-flex flex-wrap gap-1 pt-1">
+          <span class="ga-chip quick" data-range="today">Today</span>
+          <span class="ga-chip quick" data-range="7">Last 7 days</span>
+          <span class="ga-chip quick" data-range="30">Last 30 days</span>
+          <span class="ga-chip quick" data-range="month">This month</span>
+          <span class="ga-chip quick sel" data-range="year">This year (default)</span>
+        </div>
+      </div>
+    </form>
+  </div>
+</div>

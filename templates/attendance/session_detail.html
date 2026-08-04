@@ -1,0 +1,184 @@
+{% extends "layouts/app.html" %}
+{% block page_title %}{{ session.subject.code }} · {{ session.batch.label }}{% endblock %}
+{% block page_sub %}{{ session.subject.name }} — {{ session.created_at|date:"d M Y, H:i" }}{% endblock %}
+{% block topbar_actions %}
+<a href="{% url 'attendance:api_session_export' session.id %}" class="btn btn-light btn-sm">
+  <i class="fa-solid fa-file-csv me-1"></i>Export</a>
+<a href="{% url 'attendance:sessions' %}" class="btn btn-light btn-sm"><i class="fa-solid fa-arrow-left"></i></a>
+{% endblock %}
+{% block head %}<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>{% endblock %}
+
+{% block content %}
+<div class="row g-3">
+  <div class="col-lg-4">
+    <div class="card mb-3">
+      <div class="card-body">
+        <div class="d-flex justify-content-between align-items-start mb-3">
+          <div>
+            <div class="fw-bold fs-5">{{ session.subject.code }}</div>
+            <div class="text-muted-2 fs-13">{{ session.subject.name }}</div>
+          </div>
+          <span id="status-pill"></span>
+        </div>
+        <div class="row g-2 fs-13">
+          <div class="col-6"><div class="text-muted-2">Batch</div><div class="fw-600">{{ session.batch.label }}</div></div>
+          <div class="col-6"><div class="text-muted-2">Teacher</div><div class="fw-600">{{ session.teacher.get_full_name }}</div></div>
+          <div class="col-6"><div class="text-muted-2">Geo-fence</div><div class="fw-600">{{ session.radius_m }} m</div></div>
+          <div class="col-6"><div class="text-muted-2">Expires</div><div class="fw-600" id="expires"></div></div>
+          {% if session.note %}<div class="col-12"><div class="text-muted-2">Note</div><div class="fw-600">{{ session.note }}</div></div>{% endif %}
+          <div class="col-12"><div class="text-muted-2">Centre coordinates</div>
+            <div class="fw-600">{{ session.latitude }}, {{ session.longitude }}
+              <a target="_blank" rel="noopener" href="https://www.google.com/maps?q={{ session.latitude }},{{ session.longitude }}">
+                <i class="fa-solid fa-map-location-dot ms-1"></i></a></div></div>
+        </div>
+
+        <div class="row g-2 mt-3">
+          <div class="col-4"><div class="border rounded-3 text-center py-2">
+            <div class="fs-4 fw-bold text-primary" id="k-expected">0</div><small class="text-muted-2 fs-12">ENROLLED</small></div></div>
+          <div class="col-4"><div class="border rounded-3 text-center py-2">
+            <div class="fs-4 fw-bold text-success" id="k-present">0</div><small class="text-muted-2 fs-12">PRESENT</small></div></div>
+          <div class="col-4"><div class="border rounded-3 text-center py-2">
+            <div class="fs-4 fw-bold text-danger" id="k-absent">0</div><small class="text-muted-2 fs-12">ABSENT</small></div></div>
+        </div>
+        <div class="ga-bar mt-3"><span id="k-bar" style="width:0;background:#10b981"></span></div>
+      </div>
+    </div>
+
+    {% if session.is_open %}
+    <div class="card">
+      <div class="card-body text-center">
+        <div class="ga-countdown fs-1 text-primary" id="cd">--:--</div>
+        <div class="text-muted-2 fs-13 mb-3">remaining</div>
+        <div id="qr" class="d-inline-block border rounded-3 p-2 bg-white mb-3"></div>
+        <div class="ga-link-box mb-2"><span class="flex-grow-1" id="url"></span>
+          <i class="fa-solid fa-copy" style="cursor:pointer" id="copy"></i></div>
+        <div class="d-flex gap-2">
+          <button class="btn btn-soft btn-sm flex-grow-1" data-action="extend"><i class="fa-solid fa-clock-rotate-left me-1"></i>+5 min</button>
+          <button class="btn btn-soft btn-sm flex-grow-1" data-action="resend"><i class="fa-solid fa-paper-plane me-1"></i>Resend</button>
+          <button class="btn btn-light btn-sm text-danger flex-grow-1" data-action="close"><i class="fa-solid fa-stop me-1"></i>Close</button>
+        </div>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+
+  <div class="col-lg-8">
+    <div class="card">
+      <div class="card-header">
+        <ul class="nav nav-tabs card-header-tabs">
+          <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#t1">
+            Present <span class="ga-pill pill-green ms-1" id="n1">0</span></button></li>
+          <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#t2">
+            Absent <span class="ga-pill pill-red ms-1" id="n2">0</span></button></li>
+          <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#t3">
+            <i class="fa-solid fa-shield-halved me-1"></i>Rejected attempts</button></li>
+        </ul>
+      </div>
+      <div class="card-body">
+        <div class="tab-content">
+          <div class="tab-pane fade show active" id="t1"><div id="present-tbl"></div></div>
+          <div class="tab-pane fade" id="t2"><div id="absent-tbl"></div></div>
+          <div class="tab-pane fade" id="t3">
+            <p class="text-muted-2 fs-13">Every blocked attempt is logged — useful when investigating proxy attendance.</p>
+            <div id="attempts-tbl"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+$(function(){
+  // Quoted: a Mongo id renders as bare hex (6a6d87…), which is not a valid JS
+  // numeric literal, so unquoted this is a SyntaxError that kills the whole
+  // script block. It only worked while primary keys were integers.
+  const id = "{{ session.id }}";
+  let pTable=null, aTable=null, timer=null, poll=null;
+  const isOpen = {{ session.is_open|yesno:"true,false" }};
+  const SD_STATS = "#k-expected, #k-present, #k-absent";
+
+  function refresh(){
+    // once:true — this refreshes on a timer, so only the first load shows a
+    // skeleton; later polls must not dim the panel every few seconds.
+    GA.loading("#present-tbl, #absent-tbl", {rows:6, cols:4, once:true});
+    GA.loading(SD_STATS, {once:true});
+    GA.get("/attendance/api/sessions/"+id+"/status/", {}, {quiet:true}).done(function(res){
+      const d = res.data;
+      $("#status-pill").html(GA.statusPill(d.status));
+      $("#expires").text(d.expires_at);
+      $("#k-expected").text(d.expected); $("#k-present").text(d.present_count); $("#k-absent").text(d.absent_count);
+      GA.done(SD_STATS);
+      $("#k-bar").css("width", d.percentage+"%");
+      $("#n1").text(d.present_count); $("#n2").text(d.absent_count);
+      $("#url").text(d.url);
+      if(!pTable){
+        pTable = GA.table("#present-tbl", { perPage:15, rows:d.present, empty:"Nobody has marked in yet.", columns:[
+          { key:"name", label:"Student", render:(v,r)=>'<div class="d-flex align-items-center gap-2">'+GA.avatar(v)+
+            '<div><div class="fw-600">'+GA.esc(v)+'</div><small class="text-muted-2">'+GA.esc(r.email)+'</small></div></div>' },
+          { key:"roll", label:"Class roll" },
+          { key:"at", label:"Marked at" },
+          { key:"distance", label:"Distance", render:v=> v==null ? '<span class="ga-pill pill-violet">manual</span>' :
+            '<span class="ga-pill '+(v<=25?'pill-green':'pill-amber')+'">'+v+' m</span>' },
+          { key:"status", label:"Type", render:v=>GA.statusPill(v) },
+          { key:"student_id", label:"", sortable:false, className:"text-end", render:v=>
+            '<button class="btn btn-light btn-sm unmark" data-id="'+v+'" title="Undo"><i class="fa-solid fa-xmark text-danger"></i></button>' }
+        ]});
+        aTable = GA.table("#absent-tbl", { perPage:15, rows:d.absent, empty:"Nobody is absent. 🎉", columns:[
+          { key:"name", label:"Student", render:(v,r)=>'<div class="d-flex align-items-center gap-2">'+GA.avatar(v)+
+            '<div><div class="fw-600">'+GA.esc(v)+'</div><small class="text-muted-2">'+GA.esc(r.email)+'</small></div></div>' },
+          { key:"roll", label:"Class roll" },
+          { key:"student_id", label:"", sortable:false, className:"text-end", render:v=>
+            '<button class="btn btn-light btn-sm markp" data-id="'+v+'"><i class="fa-solid fa-user-check text-success me-1"></i>Mark present</button>' }
+        ]});
+      } else { pTable.setRows(d.present); aTable.setRows(d.absent); }
+
+      $(".unmark").off().on("click", function(){
+        const sid=$(this).attr("data-id");
+        GA.confirm({title:"Remove this attendance?", body:"The student will be counted absent for this class."})
+          .done(()=> GA.post("/attendance/api/sessions/"+id+"/mark/", {student:sid, present:"0"}).done(refresh));
+      });
+      $(".markp").off().on("click", function(){
+        const sid=$(this).attr("data-id");
+        GA.confirm({title:"Mark present manually?", variant:"success", icon:"fa-user-check",
+          body:"This bypasses the geo-fence and is recorded in the audit log.", confirmText:"Mark present"})
+          .done(()=> GA.post("/attendance/api/sessions/"+id+"/mark/", {student:sid, present:"1"}).done(refresh));
+      });
+
+      if(isOpen && !timer && d.seconds_left > 0){
+        timer = GA.countdown($("#cd"), d.seconds_left, ()=> { clearInterval(poll); refresh(); });
+        $("#qr").empty();
+        new QRCode(document.getElementById("qr"), {text:d.url, width:120, height:120});
+        $("#copy").off().on("click", ()=> GA.copy(d.url));
+      }
+      if(d.status !== "OPEN") clearInterval(poll);
+    });
+  }
+
+  $('[data-action]').on("click", function(){
+    const action=$(this).data("action");
+    const run = ()=> GA.post("/attendance/api/sessions/"+id+"/"+action+"/", action==="extend"?{minutes:5}:{})
+      .done(function(res){ if(action==="extend" && timer) timer.reset(res.data.seconds_left); refresh(); });
+    if(action==="close") GA.confirm({title:"Close this attendance link?"}).done(run); else run();
+  });
+
+  $('[data-bs-target="#t3"]').on("shown.bs.tab", function(){
+    GA.get("/attendance/api/sessions/"+id+"/attempts/").done(function(res){
+      GA.table("#attempts-tbl", { perPage:12, rows:res.data.rows, empty:"No blocked attempts — clean session.", columns:[
+        { key:"at", label:"Time" },
+        { key:"user", label:"Student", render:(v,r)=>'<div><div class="fw-600">'+GA.esc(v)+'</div><small class="text-muted-2">'+GA.esc(r.email)+'</small></div>' },
+        { key:"reason", label:"Outcome", render:(v,r)=>GA.statusPill(r.code==="OK"?"PRESENT":"ABSENT")+' <small class="ms-1">'+GA.esc(v)+'</small>' },
+        { key:"distance", label:"Distance", render:v=> v==null?'—':v+' m' },
+        { key:"accuracy", label:"GPS ±", render:v=> v==null?'—':v+' m' },
+        { key:"ip", label:"IP" }
+      ]});
+    });
+  });
+
+  refresh();
+  if(isOpen) poll = setInterval(refresh, 5000);
+});
+</script>
+{% endblock %}

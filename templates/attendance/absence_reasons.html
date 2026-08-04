@@ -1,0 +1,315 @@
+{% extends "layouts/app.html" %}
+{% block page_title %}Absence reasons{% endblock %}
+{% block page_sub %}Students' explanations for missed classes. Approving one records
+your decision — it does not change their attendance percentage.{% endblock %}
+
+{% block content %}
+<ul class="nav nav-tabs mb-3">
+  <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-past">
+    <i class="fa-solid fa-clock-rotate-left me-1"></i>Missed classes</button></li>
+  <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-planned">
+    <i class="fa-solid fa-calendar-plus me-1"></i>Planned absences
+    <span class="ga-pill pill-amber ms-1" id="planned-badge">0</span></button></li>
+</ul>
+
+<div class="tab-content">
+<div class="tab-pane fade show active" id="tab-past">
+<div class="card mb-3"><div class="card-body py-3 table-toolbar">
+  <div class="input-group input-group-sm" style="max-width:260px">
+    <span class="input-group-text"><i class="fa-solid fa-magnifying-glass"></i></span>
+    <input class="form-control" id="search" placeholder="Student, roll or subject…">
+  </div>
+  <select class="form-select form-select-sm" id="f-status" style="max-width:200px">
+    <option value="PENDING">Awaiting review</option>
+    <option value="APPROVED">Approved</option>
+    <option value="REJECTED">Rejected</option>
+    <option value="">All</option>
+  </select>
+  <div class="ms-auto d-flex gap-2">
+    <span class="ga-pill pill-amber" id="count-pill">0 waiting</span>
+    <button class="btn btn-light btn-sm" id="btn-refresh"><i class="fa-solid fa-rotate"></i></button>
+  </div>
+</div></div>
+
+<div class="card"><div class="card-body"><div id="tbl"></div></div></div>
+</div>
+
+<div class="tab-pane fade" id="tab-planned">
+  <div class="alert alert-light border fs-13">
+    <i class="fa-solid fa-circle-info text-primary me-2"></i>
+    Absences declared in advance. You decide only for <b>your own subjects</b> — each
+    teacher reviews their own class, so one request can be approved for some subjects
+    and not others. Once approved, the reason is applied automatically to any class the
+    student misses in that period.
+  </div>
+  <div class="card mb-3"><div class="card-body py-3 table-toolbar">
+    <div class="input-group input-group-sm" style="max-width:260px">
+      <span class="input-group-text"><i class="fa-solid fa-magnifying-glass"></i></span>
+      <input class="form-control" id="search-planned" placeholder="Student, roll or reason…">
+    </div>
+    <select class="form-select form-select-sm" id="f-planned-status" style="max-width:200px">
+      <option value="PENDING">Awaiting my review</option>
+      <option value="APPROVED">Approved</option>
+      <option value="REJECTED">Rejected</option>
+      <option value="">All</option>
+    </select>
+    <div class="ms-auto">
+      <button class="btn btn-light btn-sm" id="btn-refresh-planned">
+        <i class="fa-solid fa-rotate"></i></button>
+    </div>
+  </div></div>
+  <div class="card"><div class="card-body"><div id="tbl-planned"></div></div></div>
+</div>
+</div>
+
+<!-- review -->
+<div class="modal fade" id="review-modal" tabindex="-1"><div class="modal-dialog modal-dialog-centered">
+  <div class="modal-content"><form id="review-form">{% csrf_token %}
+    <div class="modal-header">
+      <h5 class="modal-title"><i class="fa-solid fa-gavel me-2 text-primary"></i>Review reason</h5>
+      <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+    <div class="modal-body">
+      <input type="hidden" id="review-id">
+      <input type="hidden" id="review-decision">
+      <div class="mb-2">
+        <div class="fw-600" id="review-student"></div>
+        <div class="text-muted-2 fs-13" id="review-context"></div>
+      </div>
+      <div class="border rounded-3 p-2 mb-3" style="background:#f8fafc">
+        <div class="fs-12 text-muted-2 fw-600 mb-1">STUDENT'S REASON</div>
+        <div id="review-reason" style="white-space:pre-wrap"></div>
+        <div id="review-files"></div>
+      </div>
+      <label class="form-label">Remark <span class="text-muted-2">(optional)</span></label>
+      <input class="form-control" id="review-remark" name="remark" maxlength="300"
+             placeholder="Seen by the student alongside your decision">
+      <div class="invalid-feedback"></div>
+    </div>
+    <div class="modal-footer">
+      <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+      <button type="submit" class="btn btn-primary" id="review-submit">Confirm</button>
+    </div>
+  </form></div>
+</div></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+$(function(){
+  let table = null, rows = [];
+  const modal = new bootstrap.Modal("#review-modal");
+  // Both queues report their own pending count; the sidebar badge is the sum.
+  let pendingReasons = 0, pendingPlanned = 0;
+  const syncBadge = () => GA.reviewBadge(pendingReasons + pendingPlanned);
+
+  // One row is one student's day. The classes they missed that day sit inside
+  // it as `items`, each with its own status and its own decision to make.
+  const cols = [
+    { key:"student", label:"Student",
+      // Searched on the roll and the email too, which the placeholder promises
+      // but a bare `student` key could not deliver.
+      value:r=>[r.student, r.class_roll, r.email].filter(Boolean).join(" "),
+      csv:(v,r)=>r.student,
+      render:(v,r)=>
+      '<div class="d-flex align-items-center gap-2">'+GA.avatar(r.student)+
+      '<div><div class="fw-600">'+GA.esc(r.student)+'</div>'+
+      '<small class="text-muted-2">'+GA.esc(r.class_roll || r.email)+'</small></div></div>' },
+    { key:"date", label:"Day", value:r=>r.date_iso, csv:(v,r)=>r.date,
+      render:(v,r)=>
+      '<div>'+GA.esc(r.date)+'</div><small class="text-muted-2">'+GA.esc(r.batch)+
+      ' · '+r.items.length+(r.items.length===1?' class':' classes')+'</small>' },
+    { key:"subjects", label:"Subjects", sortable:false,
+      csv:(v,r)=>r.items.map(i=>i.subject+": "+i.status_label).join(", "),
+      render:function(v, r){
+        // Every chip opens the reason; a pending one also carries its own
+        // approve/reject pair, because each class is still decided separately.
+        return r.items.map(function(i){
+          if(i.status !== "PENDING") return GA.reasonChip(i);
+          return '<span class="d-inline-flex align-items-center gap-1 me-2 mb-1">'+
+            GA.reasonChip(i)+
+            '<button class="btn btn-light btn-sm p-1 text-success approve" data-id="'+i.id+
+            '" title="Approve '+GA.esc(i.subject)+'"><i class="fa-solid fa-check"></i></button>'+
+            '<button class="btn btn-light btn-sm p-1 text-danger reject" data-id="'+i.id+
+            '" title="Reject '+GA.esc(i.subject)+'"><i class="fa-solid fa-xmark"></i></button>'+
+            '</span>';
+        }).join("");
+      } },
+    { key:"submitted_at", label:"Submitted", value:r=>r.submitted_iso,
+      csv:(v,r)=>r.submitted_at, render:(v,r)=>GA.esc(r.submitted_at) }
+  ];
+
+  /** Find one class and the day it belongs to, by reason id. */
+  function findReason(id){
+    for(const row of rows){
+      const item = row.items.find(i => String(i.id) === String(id));
+      if(item) return [row, item];
+    }
+    return [null, null];
+  }
+
+  function openReview(id, decision){
+    const [row, item] = findReason(id);
+    if(!item || item.status !== "PENDING") return;
+    $("#review-id").val(item.id);
+    $("#review-decision").val(decision);
+    $("#review-student").text(row.student + (row.class_roll ? " · " + row.class_roll : ""));
+    $("#review-context").text(
+      item.subject + " — " + item.subject_name + " · " + row.date + " · " + row.batch);
+    $("#review-reason").text(item.reason);
+    $("#review-files").html(GA.attachmentList(item.attachments, {label:"EVIDENCE"}));
+    $("#review-remark").val("");
+    GA.clearErrors($("#review-form"));
+    const approving = decision === "approve";
+    // Named, because a grouped row can hold several classes and the modal is
+    // deciding exactly one of them.
+    $("#review-submit")
+      .text((approving ? "Approve " : "Reject ") + item.subject)
+      .toggleClass("btn-primary", approving)
+      .toggleClass("btn-danger", !approving);
+    modal.show();
+  }
+
+  function bind(){
+    // Delegated: GA.table replaces these rows on every sort, filter and page.
+    $("#tbl").off("click", ".approve").on("click", ".approve", function(){
+      openReview($(this).attr("data-id"), "approve");
+    });
+    $("#tbl").off("click", ".reject").on("click", ".reject", function(){
+      openReview($(this).attr("data-id"), "reject");
+    });
+    $("#tbl").off("click", ".ga-reason-chip").on("click", ".ga-reason-chip", function(){
+      const [row, item] = findReason($(this).attr("data-reason"));
+      GA.reasonDetail(row, item);
+    });
+  }
+
+  function load(){
+    GA.loading("#tbl", {rows:8, cols:4});
+    return GA.get("{% url 'attendance:api_absence_reasons' %}",
+                  GA.query({status: $("#f-status").val()})).done(function(res){
+      rows = res.data.rows;
+      if(!table) table = GA.table("#tbl", { csvName:"absence-reasons",columns:cols, rows:rows, search:"#search",
+        perPage:15, empty:"Nothing to review here."});
+      else table.setRows(rows);
+      $("#count-pill").text(res.data.pending + (res.data.pending === 1 ? " waiting" : " waiting"));
+      pendingReasons = res.data.pending;
+      syncBadge();
+      bind();
+    });
+  }
+
+  $("#review-form").on("submit", function(e){
+    e.preventDefault();
+    const $btn = $("#review-submit");
+    GA.btnBusy($btn, true, "Saving…");
+    // "planned:<id>" routes to the per-subject decision endpoint; a bare id is
+    // a per-class reason. One form, two queues.
+    const raw = $("#review-id").val();
+    const isPlanned = raw.indexOf("planned:") === 0;
+    const url = isPlanned
+      ? "/attendance/api/planned/decisions/" + raw.slice(8) + "/review/"
+      : "/attendance/api/reasons/" + raw + "/review/";
+    GA.post(url, {
+      decision: $("#review-decision").val(), remark: $("#review-remark").val()
+    }, {quiet:true})
+      .done(function(res){
+        GA.toast(res.message, "ok"); modal.hide();
+        isPlanned ? loadPlanned() : load();
+      })
+      .fail(function(xhr){
+        const r = (xhr && xhr.responseJSON) || {};
+        GA.showErrors($("#review-form"), r.errors, r.message);
+      })
+      .always(()=> GA.btnBusy($btn, false));
+  });
+
+  $("#f-status").on("change", load);
+  $("#btn-refresh").on("click", function(){ GA.spin(this, load()); });
+  load();
+
+  /* ------------------------------------------------------ planned absences */
+  let plannedTable = null, plannedRows = [];
+
+  const plannedCols = [
+    { key:"student", label:"Student", render:(v,r)=>
+      '<div class="d-flex align-items-center gap-2">'+GA.avatar(v)+
+      '<div><div class="fw-600">'+GA.esc(v)+'</div>'+
+      '<small class="text-muted-2">'+GA.esc(r.class_roll || r.email)+' · '+GA.esc(r.batch)+
+      '</small></div></div>' },
+    { key:"from_date", label:"Period", render:(v,r)=>
+      '<div class="fw-600">'+GA.esc(v)+' – '+GA.esc(r.to_date)+'</div>'+
+      '<small class="text-muted-2">'+r.days+(r.days===1?' day':' days')+'</small>' },
+    { key:"reason", label:"Reason", sortable:false, render:v=>
+      '<div class="ga-clamp-2" title="'+GA.esc(v)+'">'+GA.esc(v)+'</div>' },
+    { key:"decisions", label:"Your subjects", sortable:false,
+      csv:v=>(v||[]).map(d=>d.subject+": "+d.status_label).join(", "),
+      render:function(v, r){
+        // Only the decisions this reviewer owns are here — the API trims the
+        // rest, so there is nothing on screen that is not theirs to change.
+        // Every chip opens the detail modal; pending ones also carry the
+        // approve/reject buttons beside it.
+        return r.decisions.map(function(d){
+          if(d.status !== "PENDING") return GA.plannedChip(d);
+          return '<span class="d-inline-flex align-items-center gap-1 me-2 mb-1">'+
+            GA.plannedChip(d)+
+            '<button class="btn btn-light btn-sm p-1 text-success plan-ok" data-id="'+d.id+
+            '" data-subject="'+GA.esc(d.subject)+'" title="Approve '+GA.esc(d.subject)+
+            '"><i class="fa-solid fa-check"></i></button>'+
+            '<button class="btn btn-light btn-sm p-1 text-danger plan-no" data-id="'+d.id+
+            '" data-subject="'+GA.esc(d.subject)+'" title="Reject '+GA.esc(d.subject)+
+            '"><i class="fa-solid fa-xmark"></i></button></span>';
+        }).join("");
+      } },
+    { key:"created_at", label:"Filed" }
+  ];
+
+  function openPlanReview(id, subject, decision){
+    $("#review-id").val("planned:" + id);
+    $("#review-decision").val(decision);
+    const row = plannedRows.find(r => r.decisions.some(d => String(d.id) === String(id)));
+    $("#review-student").text(row ? row.student + " · " + subject : subject);
+    $("#review-context").text(row ? row.from_date + " – " + row.to_date : "");
+    $("#review-reason").text(row ? row.reason : "");
+    $("#review-files").html(GA.attachmentList(row && row.attachments, {label:"EVIDENCE"}));
+    $("#review-remark").val("");
+    GA.clearErrors($("#review-form"));
+    const approving = decision === "approve";
+    $("#review-submit").text(approving ? "Approve " + subject : "Reject " + subject)
+      .toggleClass("btn-primary", approving).toggleClass("btn-danger", !approving);
+    modal.show();
+  }
+
+  function loadPlanned(){
+    GA.loading("#tbl-planned", {rows:6, cols:5});
+    return GA.get("{% url 'attendance:api_planned_absences' %}",
+                  GA.query({status: $("#f-planned-status").val()})).done(function(res){
+      plannedRows = res.data.rows;
+      if(!plannedTable) plannedTable = GA.table("#tbl-planned",
+        { csvName:"planned-absences",columns:plannedCols, rows:plannedRows, search:"#search-planned", perPage:15,
+         empty:"Nothing planned to review."});
+      else plannedTable.setRows(plannedRows);
+      $("#planned-badge").text(res.data.pending);
+      pendingPlanned = res.data.pending;
+      syncBadge();
+      $("#tbl-planned").off("click", ".ga-planned-open").on("click", ".ga-planned-open", function(){
+        const id = $(this).attr("data-decision");
+        for(const row of plannedRows){
+          const d = row.decisions.find(x => String(x.id) === String(id));
+          if(d) return GA.plannedDecision(row, d);
+        }
+      });
+      $("#tbl-planned").off("click", ".plan-ok").on("click", ".plan-ok", function(){
+        openPlanReview($(this).attr("data-id"), $(this).data("subject"), "approve");
+      });
+      $("#tbl-planned").off("click", ".plan-no").on("click", ".plan-no", function(){
+        openPlanReview($(this).attr("data-id"), $(this).data("subject"), "reject");
+      });
+    });
+  }
+
+  $("#f-planned-status").on("change", loadPlanned);
+  $("#btn-refresh-planned").on("click", function(){ GA.spin(this, loadPlanned()); });
+  loadPlanned();
+});
+</script>
+{% endblock %}

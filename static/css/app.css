@@ -1,0 +1,405 @@
+/* ==========================================================================
+   GeoAttend — design system
+   ========================================================================== */
+:root{
+  --ga-primary:#4f46e5;
+  --ga-primary-dark:#4338ca;
+  --ga-primary-soft:#eef2ff;
+  --ga-accent:#06b6d4;
+  --ga-success:#10b981;
+  --ga-warn:#f59e0b;
+  --ga-danger:#ef4444;
+  --ga-ink:#0f172a;
+  --ga-muted:#64748b;
+  --ga-line:#e2e8f0;
+  --ga-bg:#f5f7fb;
+  --ga-card:#ffffff;
+  --ga-sidebar:#0f172a;
+  --ga-sidebar-2:#1e293b;
+  --ga-radius:14px;
+  --ga-shadow:0 1px 2px rgba(15,23,42,.06), 0 8px 24px rgba(15,23,42,.06);
+  --ga-shadow-lg:0 20px 45px rgba(15,23,42,.14);
+}
+
+*{ -webkit-tap-highlight-color:transparent; }
+body{
+  background:var(--ga-bg);
+  color:var(--ga-ink);
+  font-family:"Inter","Segoe UI",system-ui,-apple-system,sans-serif;
+  font-size:.94rem;
+  /* Sticky footer: the page column fills the viewport and the footer sits at
+     the bottom of it. The full-height screens below switch from
+     min-height:100vh to flex:1 so adding a footer does not push them into a
+     scrollbar on an otherwise short page. */
+  display:flex;
+  flex-direction:column;
+  min-height:100vh;
+}
+.ga-footer{ flex:none; }
+a{ text-decoration:none; }
+.text-muted-2{ color:var(--ga-muted)!important; }
+.fw-600{ font-weight:600; }
+.fs-13{ font-size:.813rem; }
+.fs-12{ font-size:.75rem; }
+
+/* ---------- gradient / brand ------------------------------------------- */
+.ga-gradient{ background:linear-gradient(135deg,var(--ga-primary) 0%,#7c3aed 50%,var(--ga-accent) 100%); }
+.ga-gradient-text{
+  background:linear-gradient(120deg,var(--ga-primary),var(--ga-accent));
+  -webkit-background-clip:text; background-clip:text; color:transparent;
+}
+.ga-brand{ font-weight:800; letter-spacing:-.5px; }
+.ga-brand i{ color:var(--ga-accent); }
+
+/* ---------- layout ------------------------------------------------------ */
+.ga-shell{ display:flex; flex:1 0 auto; min-height:0; }
+.ga-sidebar{
+  width:256px; flex:0 0 256px; background:var(--ga-sidebar); color:#cbd5e1;
+  position:fixed; inset:0 auto 0 0; z-index:1040; display:flex; flex-direction:column;
+  transition:transform .25s ease;
+}
+.ga-sidebar .ga-side-head{ padding:20px 20px 14px; border-bottom:1px solid rgba(255,255,255,.07); }
+.ga-sidebar .ga-side-head .name{ color:#fff; font-size:1.15rem; }
+.ga-sidebar .ga-side-head .sub{ color:#7c8db5; font-size:.72rem; letter-spacing:.12em; text-transform:uppercase; }
+.ga-nav{
+  padding:14px 12px; flex:1;
+  overflow-y:auto;
+  /* Stop a fast scroll at the end of the nav from scrolling the page behind it. */
+  overscroll-behavior:contain;
+  /* Firefox */
+  scrollbar-width:thin;
+  scrollbar-color:rgba(255,255,255,.16) transparent;
+}
+/* WebKit / Blink. A slim translucent thumb reads as part of the dark panel
+   instead of the browser's default light-grey bar sitting on top of it. */
+.ga-nav::-webkit-scrollbar{ width:6px; }
+.ga-nav::-webkit-scrollbar-track{ background:transparent; }
+.ga-nav::-webkit-scrollbar-thumb{
+  background:rgba(255,255,255,.14);
+  border-radius:99px;
+  transition:background .2s ease;
+}
+.ga-nav::-webkit-scrollbar-thumb:hover{ background:rgba(255,255,255,.32); }
+.ga-nav::-webkit-scrollbar-thumb:active{ background:var(--ga-accent); }
+/* Brighten the whole bar while the pointer is anywhere in the sidebar, so it
+   stays discoverable without shouting when you are reading the page. */
+.ga-sidebar:hover .ga-nav{ scrollbar-color:rgba(255,255,255,.3) transparent; }
+.ga-sidebar:hover .ga-nav::-webkit-scrollbar-thumb{ background:rgba(255,255,255,.26); }
+.ga-nav .nav-label{
+  color:#64748b; font-size:.68rem; letter-spacing:.14em; text-transform:uppercase;
+  padding:14px 12px 6px; font-weight:700;
+}
+.ga-nav a{
+  display:flex; align-items:center; gap:12px; padding:10px 12px; border-radius:10px;
+  color:#cbd5e1; font-size:.875rem; font-weight:500; margin-bottom:2px; transition:.15s;
+}
+.ga-nav a i{ width:18px; text-align:center; font-size:.95rem; color:#7c8db5; }
+.ga-nav a:hover{ background:rgba(255,255,255,.06); color:#fff; }
+.ga-nav a:hover i{ color:#fff; }
+.ga-nav a.active{ background:linear-gradient(90deg,var(--ga-primary),#6366f1); color:#fff; box-shadow:0 6px 18px rgba(79,70,229,.4); }
+.ga-nav a.active i{ color:#fff; }
+.ga-side-foot{ padding:14px; border-top:1px solid rgba(255,255,255,.07); }
+
+.ga-main{ flex:1; margin-left:256px; min-width:0; display:flex; flex-direction:column; }
+.ga-topbar{
+  height:64px; background:#fff; border-bottom:1px solid var(--ga-line);
+  display:flex; align-items:center; gap:14px; padding:0 22px; position:sticky; top:0; z-index:1030;
+}
+.ga-content{ padding:22px; flex:1; }
+.ga-page-title{ font-size:1.35rem; font-weight:700; margin:0; }
+.ga-page-sub{ color:var(--ga-muted); font-size:.85rem; margin:2px 0 0; }
+
+@media (max-width:991.98px){
+  .ga-sidebar{ transform:translateX(-100%); }
+  .ga-sidebar.open{ transform:translateX(0); }
+  .ga-main{ margin-left:0; }
+  .ga-backdrop{ position:fixed; inset:0; background:rgba(15,23,42,.5); z-index:1035; }
+}
+
+/* ---------- avatar ------------------------------------------------------ */
+.ga-avatar{
+  width:38px; height:38px; border-radius:50%; display:grid; place-items:center;
+  background:linear-gradient(135deg,var(--ga-primary),var(--ga-accent));
+  color:#fff; font-weight:700; font-size:.8rem; flex:0 0 38px;
+}
+.ga-avatar.sm{ width:30px; height:30px; flex-basis:30px; font-size:.7rem; }
+.ga-avatar.lg{ width:64px; height:64px; flex-basis:64px; font-size:1.2rem; }
+
+/* ---------- cards ------------------------------------------------------- */
+.card{ border:1px solid var(--ga-line); border-radius:var(--ga-radius); box-shadow:var(--ga-shadow); }
+.card-header{ background:#fff; border-bottom:1px solid var(--ga-line); font-weight:600; padding:14px 18px; border-radius:var(--ga-radius) var(--ga-radius) 0 0!important; }
+.card-body{ padding:18px; }
+
+.ga-kpi{ position:relative; overflow:hidden; }
+.ga-kpi .icon{
+  width:46px; height:46px; border-radius:12px; display:grid; place-items:center;
+  font-size:1.05rem; color:#fff;
+}
+.ga-kpi .value{ font-size:1.75rem; font-weight:800; line-height:1.1; letter-spacing:-1px; }
+.ga-kpi .label{ font-size:.76rem; text-transform:uppercase; letter-spacing:.08em; color:var(--ga-muted); font-weight:600; }
+.bg-grad-1{ background:linear-gradient(135deg,#4f46e5,#7c3aed); }
+.bg-grad-2{ background:linear-gradient(135deg,#06b6d4,#0ea5e9); }
+.bg-grad-3{ background:linear-gradient(135deg,#10b981,#059669); }
+.bg-grad-4{ background:linear-gradient(135deg,#f59e0b,#f97316); }
+.bg-grad-5{ background:linear-gradient(135deg,#ef4444,#e11d48); }
+
+/* ---------- tables ------------------------------------------------------ */
+.ga-table{ width:100%; font-size:.85rem; }
+.ga-table thead th{
+  background:#f8fafc; color:var(--ga-muted); text-transform:uppercase; font-size:.7rem;
+  letter-spacing:.07em; font-weight:700; border-bottom:1px solid var(--ga-line);
+  padding:11px 14px; white-space:nowrap; position:sticky; top:0; z-index:2;
+}
+.ga-table thead th.sortable{ cursor:pointer; user-select:none; }
+.ga-table thead th.sortable:hover{ color:var(--ga-primary); }
+.ga-table thead th .sort-ic{ opacity:.35; margin-left:5px; }
+.ga-table thead th.sorted .sort-ic{ opacity:1; color:var(--ga-primary); }
+.ga-table tbody td{ padding:11px 14px; border-bottom:1px solid #f1f5f9; vertical-align:middle; }
+.ga-table tbody tr:hover{ background:#fafbff; }
+.ga-table-wrap{ max-height:560px; overflow:auto; border-radius:var(--ga-radius); }
+
+/* ---------- badges & pills --------------------------------------------- */
+.ga-pill{
+  display:inline-flex; align-items:center; gap:5px; padding:3px 10px; border-radius:999px;
+  font-size:.72rem; font-weight:600; line-height:1.5;
+}
+.pill-green{ background:#dcfce7; color:#166534; }
+.pill-red{ background:#fee2e2; color:#991b1b; }
+.pill-amber{ background:#fef3c7; color:#92400e; }
+.pill-blue{ background:#dbeafe; color:#1e40af; }
+.pill-grey{ background:#f1f5f9; color:#475569; }
+.pill-violet{ background:#ede9fe; color:#5b21b6; }
+
+.ga-bar{ height:6px; border-radius:99px; background:#eef2f7; overflow:hidden; min-width:70px; }
+.ga-bar > span{ display:block; height:100%; border-radius:99px; }
+
+/* ---------- forms ------------------------------------------------------- */
+.form-control,.form-select{ border-radius:10px; border-color:#dbe2ea; padding:.55rem .8rem; font-size:.875rem; }
+.form-control:focus,.form-select:focus{ border-color:var(--ga-primary); box-shadow:0 0 0 3px rgba(79,70,229,.13); }
+.form-label{ font-size:.8rem; font-weight:600; color:#334155; margin-bottom:.3rem; }
+.btn{ border-radius:10px; font-weight:600; font-size:.875rem; padding:.55rem 1.05rem; }
+.btn-primary{ background:var(--ga-primary); border-color:var(--ga-primary); }
+.btn-primary:hover,.btn-primary:focus{ background:var(--ga-primary-dark); border-color:var(--ga-primary-dark); }
+.btn-soft{ background:var(--ga-primary-soft); color:var(--ga-primary); border:1px solid #e0e7ff; }
+.btn-soft:hover{ background:#e0e7ff; color:var(--ga-primary-dark); }
+.btn-lg{ padding:.8rem 1.5rem; font-size:.95rem; }
+.input-group-text{ border-radius:10px; background:#f8fafc; border-color:#dbe2ea; color:var(--ga-muted); }
+
+/* ---------- auth pages -------------------------------------------------- */
+.ga-auth{ flex:1 0 auto; display:flex; }
+.ga-auth-visual{
+  flex:1 1 46%; color:#fff; padding:48px; display:flex; flex-direction:column; justify-content:space-between;
+  position:relative; overflow:hidden;
+}
+.ga-auth-visual::after{
+  content:""; position:absolute; width:520px; height:520px; border-radius:50%;
+  background:rgba(255,255,255,.08); right:-160px; bottom:-190px;
+}
+.ga-auth-visual::before{
+  content:""; position:absolute; width:280px; height:280px; border-radius:50%;
+  background:rgba(255,255,255,.07); left:-90px; top:-90px;
+}
+.ga-auth-form{ flex:1 1 54%; display:flex; align-items:center; justify-content:center; padding:32px 20px; background:#fff; }
+.ga-auth-box{ width:100%; max-width:440px; }
+.ga-auth-box.wide{ max-width:760px; }
+@media (max-width:991.98px){ .ga-auth-visual{ display:none; } }
+
+.ga-feature{ display:flex; gap:14px; margin-bottom:22px; position:relative; z-index:2; }
+.ga-feature i{
+  width:42px; height:42px; border-radius:12px; background:rgba(255,255,255,.16);
+  display:grid; place-items:center; flex:0 0 42px; font-size:1rem;
+}
+
+/* ---------- stepper ----------------------------------------------------- */
+.ga-steps{ display:flex; gap:8px; margin-bottom:24px; }
+.ga-step{ flex:1; }
+.ga-step .bar{ height:4px; border-radius:99px; background:#e2e8f0; }
+.ga-step.active .bar,.ga-step.done .bar{ background:var(--ga-primary); }
+.ga-step .cap{ font-size:.7rem; margin-top:6px; color:var(--ga-muted); font-weight:600; text-transform:uppercase; letter-spacing:.06em; }
+.ga-step.active .cap{ color:var(--ga-primary); }
+
+/* ---------- OTP inputs -------------------------------------------------- */
+.otp-group{ display:flex; gap:10px; justify-content:center; }
+.otp-group input{
+  width:52px; height:60px; text-align:center; font-size:1.4rem; font-weight:700;
+  border:1.5px solid #dbe2ea; border-radius:12px;
+}
+.otp-group input:focus{ border-color:var(--ga-primary); box-shadow:0 0 0 3px rgba(79,70,229,.14); outline:none; }
+
+/* ---------- toasts ------------------------------------------------------ */
+#ga-toasts{ position:fixed; top:18px; right:18px; z-index:2000; display:flex; flex-direction:column; gap:10px; max-width:380px; }
+.ga-toast{
+  background:#fff; border-left:4px solid var(--ga-primary); border-radius:12px; padding:13px 16px;
+  box-shadow:var(--ga-shadow-lg); display:flex; gap:11px; align-items:flex-start;
+  animation:gaSlide .28s ease; font-size:.86rem;
+}
+.ga-toast.ok{ border-left-color:var(--ga-success); }
+.ga-toast.err{ border-left-color:var(--ga-danger); }
+.ga-toast.warn{ border-left-color:var(--ga-warn); }
+.ga-toast i{ font-size:1rem; margin-top:1px; }
+.ga-toast.ok i{ color:var(--ga-success); }
+.ga-toast.err i{ color:var(--ga-danger); }
+.ga-toast.warn i{ color:var(--ga-warn); }
+.ga-toast.info i{ color:var(--ga-primary); }
+@keyframes gaSlide{ from{ transform:translateX(40px); opacity:0; } to{ transform:none; opacity:1; } }
+
+/* ---------- loader ------------------------------------------------------ */
+.ga-overlay{
+  position:fixed; inset:0; background:rgba(248,250,252,.72); backdrop-filter:blur(2px);
+  display:none; place-items:center; z-index:1900;
+}
+.ga-overlay.show{ display:grid; }
+.ga-spinner{
+  width:44px; height:44px; border:4px solid #e2e8f0; border-top-color:var(--ga-primary);
+  border-radius:50%; animation:gaSpin .8s linear infinite;
+}
+@keyframes gaSpin{ to{ transform:rotate(360deg); } }
+.ga-skeleton{ background:linear-gradient(90deg,#eef2f7 25%,#f8fafc 50%,#eef2f7 75%); background-size:200% 100%; animation:gaShimmer 1.2s infinite; border-radius:8px; }
+@keyframes gaShimmer{ to{ background-position:-200% 0; } }
+
+/* ---------- loading states ----------------------------------------------
+   Two different situations, deliberately shown differently:
+
+   .ga-skel-*  first load — nothing on screen yet, so draw placeholders in the
+               shape of the content to come. No layout jump when data lands.
+   .ga-busy    refilter — real data is already on screen. Dim it rather than
+               tearing it down, so the page keeps its height and the numbers
+               visibly read as stale instead of looking current.
+-------------------------------------------------------------------------- */
+.ga-skel-line{ height:12px; margin:9px 0; }
+.ga-skel-line.sm{ height:10px; }
+.ga-skel-row{ display:flex; gap:14px; align-items:center; padding:11px 14px; border-bottom:1px solid var(--ga-line); }
+.ga-skel-row > span{ display:block; height:12px; border-radius:6px; }
+.ga-skel-head{ background:#f8fafc; }
+.ga-skel-chart{ width:100%; height:100%; min-height:120px; border-radius:12px; }
+.ga-skel-stat{ height:26px; width:72px; border-radius:8px; }
+
+/* Stagger the rows so it reads as a list loading, not one solid block. */
+.ga-skel-row:nth-child(2n) > span{ animation-delay:.15s; }
+.ga-skel-row:nth-child(3n) > span{ animation-delay:.3s; }
+
+.ga-busy{ position:relative; }
+.ga-busy > *{ opacity:.38; transition:opacity .15s; pointer-events:none; }
+.ga-busy::after{
+  content:""; position:absolute; top:50%; left:50%; width:26px; height:26px; margin:-13px 0 0 -13px;
+  border:3px solid #e2e8f0; border-top-color:var(--ga-primary); border-radius:50%;
+  animation:gaSpin .8s linear infinite; z-index:3;
+}
+/* A KPI number is too small for a centred spinner — just dim it. */
+.ga-busy.ga-busy-quiet::after{ display:none; }
+
+@media (prefers-reduced-motion:reduce){
+  .ga-skeleton,.ga-skel-chart,.ga-skel-stat,.ga-skel-row > span{ animation:none; }
+  .ga-busy::after{ animation-duration:2.4s; }
+}
+
+/* ---------- attendance mark screen -------------------------------------- */
+.ga-mark{ flex:1 0 auto; display:grid; place-items:center; padding:22px; }
+.ga-mark-card{ width:100%; max-width:470px; border-radius:22px; overflow:hidden; box-shadow:var(--ga-shadow-lg); background:#fff; }
+.ga-mark-head{ padding:26px; color:#fff; text-align:center; }
+.ga-mark-icon{
+  width:88px; height:88px; border-radius:50%; margin:0 auto 16px; display:grid; place-items:center;
+  font-size:2.2rem; background:rgba(255,255,255,.2);
+}
+.ga-pulse{ animation:gaPulse 1.6s ease-in-out infinite; }
+@keyframes gaPulse{ 0%,100%{ transform:scale(1); opacity:1; } 50%{ transform:scale(1.07); opacity:.85; } }
+.ga-radar{ position:relative; width:120px; height:120px; margin:0 auto; }
+.ga-radar span{
+  position:absolute; inset:0; border:2px solid rgba(255,255,255,.5); border-radius:50%;
+  animation:gaRadar 2s ease-out infinite;
+}
+.ga-radar span:nth-child(2){ animation-delay:.6s; }
+.ga-radar span:nth-child(3){ animation-delay:1.2s; }
+@keyframes gaRadar{ 0%{ transform:scale(.35); opacity:1; } 100%{ transform:scale(1); opacity:0; } }
+
+/* ---------- countdown --------------------------------------------------- */
+.ga-countdown{ font-variant-numeric:tabular-nums; font-weight:800; letter-spacing:-1px; }
+.ga-live-dot{
+  width:9px; height:9px; border-radius:50%; background:var(--ga-success); display:inline-block;
+  box-shadow:0 0 0 0 rgba(16,185,129,.6); animation:gaBlink 1.5s infinite;
+}
+@keyframes gaBlink{ 70%{ box-shadow:0 0 0 9px rgba(16,185,129,0); } 100%{ box-shadow:0 0 0 0 rgba(16,185,129,0); } }
+
+/* ---------- phone number with call / WhatsApp actions -------------------- */
+.ga-phone{ display:inline-flex; align-items:center; gap:6px; white-space:nowrap; }
+.ga-phone .num{ font-variant-numeric:tabular-nums; }
+.ga-dial{
+  width:24px; height:24px; border-radius:50%; display:inline-grid; place-items:center;
+  background:#f1f5f9; color:var(--ga-muted); font-size:.72rem; flex:0 0 24px;
+  border:1px solid var(--ga-line); transition:.15s;
+}
+.ga-dial:hover{ background:var(--ga-primary); color:#fff; border-color:var(--ga-primary); }
+.ga-dial.wa:hover{ background:#25d366; border-color:#25d366; }
+tr:hover .ga-dial{ background:#fff; }
+tr:hover .ga-dial:hover{ background:var(--ga-primary); }
+tr:hover .ga-dial.wa:hover{ background:#25d366; }
+
+/* ---------- misc -------------------------------------------------------- */
+.ga-empty{ text-align:center; padding:44px 18px; color:var(--ga-muted); }
+.ga-empty i{ font-size:2.4rem; color:#cbd5e1; margin-bottom:12px; display:block; }
+.ga-chip{
+  display:inline-flex; align-items:center; gap:6px; background:#f1f5f9; border:1px solid var(--ga-line);
+  padding:4px 10px; border-radius:99px; font-size:.75rem; font-weight:600; color:#334155; margin:2px;
+}
+.ga-chip .x{ cursor:pointer; color:var(--ga-muted); }
+.ga-chip .x:hover{ color:var(--ga-danger); }
+.ga-chip.sel{ background:var(--ga-primary-soft); border-color:#c7d2fe; color:var(--ga-primary); }
+.ga-scroll-y{ max-height:300px; overflow-y:auto; overscroll-behavior:contain; }
+
+/* The same slim treatment for light-background scroll areas: tables, pickers,
+   the subject list in the teacher dialog. */
+.ga-scroll-y, .ga-table-wrap, .ga-content{ scrollbar-width:thin; scrollbar-color:#cbd5e1 transparent; }
+.ga-scroll-y::-webkit-scrollbar,
+.ga-table-wrap::-webkit-scrollbar,
+.modal-body::-webkit-scrollbar{ width:8px; height:8px; }
+.ga-scroll-y::-webkit-scrollbar-track,
+.ga-table-wrap::-webkit-scrollbar-track,
+.modal-body::-webkit-scrollbar-track{ background:transparent; }
+.ga-scroll-y::-webkit-scrollbar-thumb,
+.ga-table-wrap::-webkit-scrollbar-thumb,
+.modal-body::-webkit-scrollbar-thumb{
+  background:#dbe2ea; border-radius:99px; border:2px solid transparent;
+  background-clip:content-box; transition:background .2s ease;
+}
+.ga-scroll-y::-webkit-scrollbar-thumb:hover,
+.ga-table-wrap::-webkit-scrollbar-thumb:hover,
+.modal-body::-webkit-scrollbar-thumb:hover{ background:#94a3b8; background-clip:content-box; }
+/* Keep the sticky table header clear of the horizontal bar's corner. */
+.ga-table-wrap::-webkit-scrollbar-corner{ background:transparent; }
+.ga-link-box{
+  background:#0f172a; color:#e2e8f0; border-radius:12px; padding:12px 14px; font-family:ui-monospace,monospace;
+  font-size:.78rem; word-break:break-all; display:flex; align-items:center; gap:10px;
+}
+.modal-content{ border:0; border-radius:16px; box-shadow:var(--ga-shadow-lg); }
+.modal-header{ border-bottom:1px solid var(--ga-line); padding:16px 20px; }
+.modal-footer{ border-top:1px solid var(--ga-line); padding:14px 20px; }
+.nav-tabs{ border-bottom:1px solid var(--ga-line); }
+.nav-tabs .nav-link{ border:0; border-bottom:2px solid transparent; color:var(--ga-muted); font-weight:600; font-size:.86rem; }
+.nav-tabs .nav-link.active{ color:var(--ga-primary); border-bottom-color:var(--ga-primary); background:transparent; }
+.table-toolbar{ display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
+.ga-print-only{ display:none; }
+@media print{
+  .ga-sidebar,.ga-topbar,.btn,.table-toolbar,#ga-toasts{ display:none!important; }
+  .ga-main{ margin-left:0; }
+  .ga-print-only{ display:block; }
+  .card{ box-shadow:none; border:1px solid #ddd; break-inside:avoid; }
+}
+
+/* Two-line clamp for long free text inside a table cell (absence reasons). */
+.ga-clamp-2{
+  display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical;
+  overflow:hidden; max-width:340px;
+}
+
+/* ---------- sidebar count badge ----------------------------------------- */
+/* Sits at the right edge of its nav row, so the label stays put whether or
+   not there is a number to show. */
+.ga-nav-badge{
+  margin-left:auto;
+  min-width:20px; padding:1px 6px; border-radius:999px;
+  background:var(--ga-danger); color:#fff;
+  font-size:.68rem; font-weight:700; line-height:1.5; text-align:center;
+  box-shadow:0 0 0 2px rgba(239,68,68,.25);
+}
+/* On the active row the red would fight the indigo highlight. */
+.ga-nav a.active .ga-nav-badge{ background:#fff; color:var(--ga-primary); box-shadow:none; }

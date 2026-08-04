@@ -1,0 +1,10 @@
+You've been invited to {{ SITE_NAME }} as {{ role_label }}
+
+{{ invitation.institute.name }} added {{ invitation.email }}{% if invitation.department %} to the {{ invitation.department.name }} department{% endif %}.
+{% for line in extra_lines %}
+- {{ line }}{% endfor %}
+
+Complete your registration here:
+{{ accept_url }}
+
+This link expires in {{ expires_days }} days.

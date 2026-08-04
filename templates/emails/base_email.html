@@ -1,0 +1,15 @@
+<!doctype html><html><body style="margin:0;padding:0;background:#f5f7fb;font-family:'Segoe UI',Arial,sans-serif;color:#0f172a">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#f5f7fb;padding:28px 12px">
+<tr><td align="center">
+  <table width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;background:#fff;border-radius:14px;overflow:hidden;box-shadow:0 6px 24px rgba(15,23,42,.08)">
+    <tr><td style="background:linear-gradient(135deg,#4f46e5,#06b6d4);padding:22px 26px;color:#fff">
+      <div style="font-size:19px;font-weight:700">📍 {{ SITE_NAME }}</div>
+      <div style="font-size:12px;opacity:.85">Geo-verified classroom attendance</div>
+    </td></tr>
+    <tr><td style="padding:26px">{% block content %}{% endblock %}</td></tr>
+    <tr><td style="padding:16px 26px;background:#f8fafc;color:#64748b;font-size:11px;border-top:1px solid #e2e8f0">
+      This is an automated message from {{ SITE_NAME }}. Please do not reply.<br>&copy; {{ year }} {{ SITE_NAME }}
+    </td></tr>
+  </table>
+</td></tr></table>
+</body></html>

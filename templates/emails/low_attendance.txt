@@ -1,0 +1,5 @@
+Attendance below {{ threshold }}%
+
+Hi {{ user.short_name }}, your attendance needs attention:
+{% for r in rows %}
+{{ r.code }}: {{ r.attended }}/{{ r.held }} = {{ r.percentage }}%{% endfor %}

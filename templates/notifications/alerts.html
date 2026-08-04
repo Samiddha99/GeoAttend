@@ -1,0 +1,650 @@
+{% extends "layouts/app.html" %}
+{% load static %}
+{% block page_title %}Low-attendance alerts{% endblock %}
+{% block page_sub %}Email students, WhatsApp them and their guardians when attendance slips.{% endblock %}
+{% block topbar_actions %}
+<button class="btn btn-light btn-sm" data-bs-toggle="modal" data-bs-target="#history-modal">
+  <i class="fa-solid fa-clock-rotate-left me-1"></i>History</button>
+{% if user.is_head or user.is_hod %}
+<button class="btn btn-light btn-sm" data-bs-toggle="modal" data-bs-target="#test-modal">
+  <i class="fa-brands fa-whatsapp me-1 text-success"></i>Test</button>
+{% endif %}
+{% endblock %}
+
+{% block content %}
+{% if not whatsapp_is_live %}
+<div class="alert alert-warning d-flex gap-3 align-items-start">
+  <i class="fa-brands fa-whatsapp fa-lg mt-1"></i>
+  <div>
+    <b>WhatsApp is in console mode.</b> Messages are written to the server terminal
+    instead of being delivered, so you can rehearse the whole flow safely.
+    Add <code>TWILIO_ACCOUNT_SID</code>, <code>TWILIO_AUTH_TOKEN</code> and
+    <code>TWILIO_WHATSAPP_FROM</code> to <code>.env</code> to go live.
+    Student emails are unaffected.
+  </div>
+</div>
+{% elif not student_templates and not guardian_templates %}
+<div class="alert alert-danger d-flex gap-3 align-items-start">
+  <i class="fa-solid fa-triangle-exclamation fa-lg mt-1"></i>
+  <div>
+    <b>No approved WhatsApp templates yet.</b> WhatsApp refuses free-form messages that a
+    business sends first, so an alert can only go out as wording WhatsApp has approved in
+    advance. {% if can_manage_templates %}Register one under
+    <a href="{% url 'notifications:templates' %}">WhatsApp templates</a>.{% else %}Ask your
+    head of institute to register one.{% endif %} Email alerts work regardless.
+  </div>
+</div>
+{% endif %}
+
+<div class="row g-3">
+  <!-- ─────────────── step 1: who ─────────────── -->
+  <div class="col-xl-5">
+    <div class="card mb-3">
+      <div class="card-header"><i class="fa-solid fa-filter me-2 text-primary"></i>1 · Who gets an alert</div>
+      <div class="card-body">
+        <label class="form-label">Alert type</label>
+        <div class="d-flex gap-2 mb-3">
+          <button type="button" class="btn btn-soft flex-grow-1 scope-btn active" data-scope="OVERALL">
+            <i class="fa-solid fa-chart-pie me-1"></i>Overall attendance</button>
+          <button type="button" class="btn btn-soft flex-grow-1 scope-btn" data-scope="SUBJECT">
+            <i class="fa-solid fa-book me-1"></i>One subject</button>
+        </div>
+
+        <div class="mb-3 d-none" id="subject-wrap">
+          <label class="form-label">Subject *</label>
+          <select class="form-select" id="f-subject">
+            <option value="">Choose a subject…</option>
+            {% for s in subjects %}<option value="{{ s.id }}">{{ s.code }} — {{ s.name }}</option>{% endfor %}
+          </select>
+        </div>
+
+        <div class="row g-2 mb-3">
+          <div class="col-12">
+            <label class="form-label">Threshold — alert everyone below this</label>
+            <div class="input-group">
+              <input type="number" class="form-control" id="f-threshold" value="{{ threshold }}" min="1" max="100" step="0.5">
+              <span class="input-group-text">%</span>
+            </div>
+            <div class="d-flex flex-wrap gap-1 mt-2">
+              <span class="ga-chip quick-th" data-t="50">50%</span>
+              <span class="ga-chip quick-th" data-t="60">60%</span>
+              <span class="ga-chip quick-th" data-t="65">65%</span>
+              <span class="ga-chip quick-th sel" data-t="{{ threshold }}">{{ threshold }}%</span>
+              <span class="ga-chip quick-th" data-t="85">85%</span>
+            </div>
+          </div>
+          <div class="col-6"><label class="form-label">From</label>
+            <input type="date" class="form-control form-control-sm" id="f-start" value="{{ default_start }}"></div>
+          <div class="col-6"><label class="form-label">To</label>
+            <input type="date" class="form-control form-control-sm" id="f-end" value="{{ default_end }}"></div>
+          {% if user.is_head %}
+          <div class="col-12"><label class="form-label">Department</label>
+            <select class="form-select form-select-sm" id="f-department">
+              <option value="">All departments</option>
+              {% for d in departments %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}
+            </select></div>
+          {% endif %}
+          <div class="col-12"><label class="form-label">Batch</label>
+            <select class="form-select form-select-sm" id="f-batch">
+              <option value="">All batches</option>
+              {% for b in batches %}<option value="{{ b.id }}" data-dept="{{ b.department_id }}">{{ b.label }} · {{ b.department.code }}</option>{% endfor %}
+            </select></div>
+        </div>
+
+        <button class="btn btn-primary w-100" id="btn-find">
+          <i class="fa-solid fa-magnifying-glass me-1"></i>Find students below threshold</button>
+      </div>
+    </div>
+
+    <!-- ─────────────── step 3: channels ─────────────── -->
+    <div class="card">
+      <div class="card-header"><i class="fa-solid fa-paper-plane me-2 text-primary"></i>3 · Send</div>
+      <div class="card-body">
+        <div class="form-check mb-2">
+          <input class="form-check-input" type="checkbox" id="ch-email" checked>
+          <label class="form-check-label" for="ch-email">
+            <i class="fa-solid fa-envelope text-primary me-1"></i>Email the student
+            <span class="text-muted-2 fs-12 d-block" id="email-note"></span>
+          </label>
+        </div>
+        <div class="form-check mb-2">
+          <input class="form-check-input" type="checkbox" id="ch-student-wa">
+          <label class="form-check-label" for="ch-student-wa">
+            <i class="fa-brands fa-whatsapp text-success me-1"></i>WhatsApp the student
+            <span class="text-muted-2 fs-12 d-block" id="swa-note"></span>
+          </label>
+        </div>
+        <div class="form-check mb-3">
+          <input class="form-check-input" type="checkbox" id="ch-whatsapp" checked>
+          <label class="form-check-label" for="ch-whatsapp">
+            <i class="fa-brands fa-whatsapp text-success me-1"></i>WhatsApp the guardian
+            <span class="text-muted-2 fs-12 d-block" id="wa-note"></span>
+          </label>
+        </div>
+        <button class="btn btn-primary w-100 btn-lg" id="btn-send" disabled>
+          <i class="fa-solid fa-paper-plane me-2"></i>Send alerts
+        </button>
+        <p class="text-muted-2 fs-12 mt-2 mb-0">
+          The recipient list is recalculated on the server when you press send, so it is
+          always based on live attendance — never on a stale screen.
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─────────────── step 2: message + recipients ─────────────── -->
+  <div class="col-xl-7">
+    <div class="card mb-3">
+      <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+        <span><i class="fa-solid fa-users me-2 text-primary"></i>Recipients
+          <span class="ga-pill pill-red ms-1" id="count-pill">0</span></span>
+        <div class="d-flex gap-2 align-items-center">
+          <small class="text-muted-2" id="range-note"></small>
+          <button class="btn btn-light btn-sm" id="btn-all">Select all</button>
+          <button class="btn btn-light btn-sm" id="btn-none">Clear</button>
+        </div>
+      </div>
+      <div class="card-body">
+        <div id="recipients"><div class="ga-empty"><i class="fa-solid fa-user-group"></i>
+          Set your filters and press <b>Find students</b>.</div></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+        <ul class="nav nav-tabs card-header-tabs">
+          <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-email">
+            <i class="fa-solid fa-envelope me-1"></i>Student email</button></li>
+          <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-swa">
+            <i class="fa-brands fa-whatsapp me-1"></i>Student WhatsApp</button></li>
+          <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-wa">
+            <i class="fa-brands fa-whatsapp me-1"></i>Guardian WhatsApp</button></li>
+          <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-preview">
+            <i class="fa-solid fa-eye me-1"></i>Preview</button></li>
+        </ul>
+        <button class="btn btn-light btn-sm" id="btn-reset-tpl">
+          <i class="fa-solid fa-rotate-left me-1"></i>Reset email to default</button>
+      </div>
+      <div class="card-body">
+        <div class="alert alert-light border fs-12 d-flex gap-2 py-2">
+          <i class="fa-solid fa-code text-primary mt-1"></i>
+          <div class="flex-grow-1">
+            Click a placeholder to insert it into the <b>email</b>. WhatsApp wording comes
+            from approved templates and cannot be edited here — that restriction is
+            WhatsApp's: changing approved text invalidates the approval.
+            <div class="mt-2" id="placeholder-chips">
+              {% for key, help in placeholders.items %}
+              <span class="ga-chip ph" data-ph="{{ key }}" title="{{ help }}">{% templatetag openvariable %}{{ key }}{% templatetag closevariable %}</span>
+              {% endfor %}
+            </div>
+          </div>
+        </div>
+
+        <div class="tab-content">
+          <div class="tab-pane fade show active" id="tab-email">
+            <label class="form-label">Subject line</label>
+            <input class="form-control mb-3 tpl" id="t-email-subject">
+            <label class="form-label">Body</label>
+            <textarea class="form-control tpl" id="t-email-body" rows="14" style="font-family:ui-monospace,monospace;font-size:.82rem"></textarea>
+          </div>
+          <div class="tab-pane fade" id="tab-swa">
+            {% if student_templates %}
+            <label class="form-label">Approved template for the student *</label>
+            <select class="form-select mb-3" id="t-swa-pick">
+              <option value="">Choose a template…</option>
+              {% for t in student_templates %}
+              <option value="{{ t.id }}" data-body="{{ t.body }}"
+                      data-vars="{{ t.variable_order|join:', ' }}">{{ t.name }}</option>
+              {% endfor %}
+            </select>
+            <div class="border rounded-3 p-3" id="t-swa-body"
+                 style="background:#e7ffdb;white-space:pre-wrap;font-size:.86rem;min-height:120px">
+              <span class="text-muted-2">Pick a template to see its wording.</span>
+            </div>
+            <div class="form-text" id="swa-vars"></div>
+            {% else %}
+            <div class="ga-empty"><i class="fa-brands fa-whatsapp"></i>
+              No approved student template yet.
+              {% if can_manage_templates %}<a href="{% url 'notifications:templates' %}">Register one</a>.
+              {% else %}Ask your head of institute to register one.{% endif %}</div>
+            {% endif %}
+          </div>
+          <div class="tab-pane fade" id="tab-wa">
+            {% if guardian_templates %}
+            <label class="form-label">Approved template for the guardian *</label>
+            <select class="form-select mb-3" id="t-wa-pick">
+              <option value="">Choose a template…</option>
+              {% for t in guardian_templates %}
+              <option value="{{ t.id }}" data-body="{{ t.body }}"
+                      data-vars="{{ t.variable_order|join:', ' }}">{{ t.name }}</option>
+              {% endfor %}
+            </select>
+            <div class="border rounded-3 p-3" id="t-wa-body"
+                 style="background:#e7ffdb;white-space:pre-wrap;font-size:.86rem;min-height:120px">
+              <span class="text-muted-2">Pick a template to see its wording.</span>
+            </div>
+            <div class="form-text" id="wa-vars"></div>
+            {% else %}
+            <div class="ga-empty"><i class="fa-brands fa-whatsapp"></i>
+              No approved guardian template yet.
+              {% if can_manage_templates %}<a href="{% url 'notifications:templates' %}">Register one</a>.
+              {% else %}Ask your head of institute to register one.{% endif %}</div>
+            {% endif %}
+          </div>
+          <div class="tab-pane fade" id="tab-preview">
+            <div class="d-flex gap-2 align-items-end mb-3">
+              <div class="flex-grow-1">
+                <label class="form-label">Preview as</label>
+                <select class="form-select form-select-sm" id="preview-student">
+                  <option value="">First recipient</option>
+                </select>
+              </div>
+              <button class="btn btn-soft btn-sm" id="btn-preview">
+                <i class="fa-solid fa-arrows-rotate me-1"></i>Refresh</button>
+            </div>
+            <div id="preview-out"><div class="ga-empty"><i class="fa-solid fa-eye"></i>
+              Find recipients first, then refresh the preview.</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- results -->
+<div class="modal fade" id="result-modal" tabindex="-1"><div class="modal-dialog modal-xl modal-dialog-centered">
+  <div class="modal-content">
+    <div class="modal-header"><h5 class="modal-title"><i class="fa-solid fa-circle-check text-success me-2"></i>Delivery report</h5>
+      <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+    <div class="modal-body">
+      <div class="row g-2 mb-3" id="result-counts"></div>
+      <div id="result-table"></div>
+    </div>
+  </div>
+</div></div>
+
+<!-- history -->
+<div class="modal fade" id="history-modal" tabindex="-1"><div class="modal-dialog modal-xl modal-dialog-centered">
+  <div class="modal-content">
+    <div class="modal-header"><h5 class="modal-title">Alert history</h5>
+      <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+    <div class="modal-body"><div id="history-table"></div></div>
+  </div>
+</div></div>
+
+{% if user.is_head or user.is_hod %}
+<!-- whatsapp test -->
+<div class="modal fade" id="test-modal" tabindex="-1"><div class="modal-dialog modal-dialog-centered">
+  <div class="modal-content"><form id="test-form">{% csrf_token %}
+    <div class="modal-header"><h5 class="modal-title"><i class="fa-brands fa-whatsapp text-success me-2"></i>Test WhatsApp delivery</h5>
+      <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+    <div class="modal-body">
+      <p class="text-muted-2 fs-13">Sends one message through the configured backend
+        (<code>{{ whatsapp_backend }}</code>) so you can confirm your API is wired up.</p>
+      <div class="mb-3"><label class="form-label">Number</label>
+        <input class="form-control" name="to" placeholder="+919812345670" required></div>
+      <div class="mb-0"><label class="form-label">Message</label>
+        <textarea class="form-control" name="message" rows="3">Test message from {{ SITE_NAME }}.</textarea></div>
+    </div>
+    <div class="modal-footer">
+      <button type="button" class="btn btn-light" data-bs-dismiss="modal">Close</button>
+      <button type="submit" class="btn btn-primary">Send test</button>
+    </div>
+  </form></div>
+</div></div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+$(function(){
+  let scope = "OVERALL", rows = [], table = null, selected = new Set(), lastFocused = null;
+
+  /* ---------------- filters ---------------- */
+  function params(){
+    return GA.query({
+      scope: scope,
+      subject: $("#f-subject").val(),
+      threshold: $("#f-threshold").val(),
+      start: $("#f-start").val(),
+      end: $("#f-end").val(),
+      department: $("#f-department").val(),
+      batch: $("#f-batch").val()
+    });
+  }
+
+  $(".scope-btn").on("click", function(){
+    $(".scope-btn").removeClass("active"); $(this).addClass("active");
+    scope = $(this).data("scope");
+    $("#subject-wrap").toggleClass("d-none", scope !== "SUBJECT");
+    loadDefaults();
+    clearRecipients();
+  });
+
+  $(".quick-th").on("click", function(){
+    $(".quick-th").removeClass("sel"); $(this).addClass("sel");
+    $("#f-threshold").val($(this).data("t"));
+  });
+  $("#f-threshold").on("input", ()=> $(".quick-th").removeClass("sel"));
+
+  $("#f-department").on("change", function(){
+    const d = $(this).val();
+    $("#f-batch option").each(function(){
+      const own = $(this).data("dept");
+      $(this).toggle(!d || !own || String(own) === String(d));
+    });
+    $("#f-batch").val("");
+  });
+
+  /* ---------------- templates ---------------- */
+  function loadDefaults(){
+    GA.get("{% url 'notifications:api_defaults' %}", {scope: scope}, {quiet:true}).done(function(res){
+      const t = res.data.templates;
+      $("#t-email-subject").val(t.email_subject);
+      $("#t-email-body").val(t.email_body);
+    });
+  }
+  $("#btn-reset-tpl").on("click", function(){
+    GA.confirm({title:"Discard your email edits?", variant:"warning", icon:"fa-rotate-left",
+      body:"The email subject and body return to the built-in default. WhatsApp templates are unaffected.",
+      confirmText:"Reset"}).done(loadDefaults);
+  });
+
+  // remember which field the cursor was in, so chips insert in the right place
+  $(document).on("focus click keyup", ".tpl", function(){ lastFocused = this; });
+
+  $(".ph").on("click", function(){
+    const token = "{% templatetag openvariable %}" + $(this).data("ph") + "{% templatetag closevariable %}";
+    const el = lastFocused || document.getElementById("t-email-body");
+    const start = el.selectionStart || 0, end = el.selectionEnd || 0;
+    el.value = el.value.slice(0, start) + token + el.value.slice(end);
+    el.focus();
+    el.selectionStart = el.selectionEnd = start + token.length;
+    waLen();
+  });
+
+  // Show the approved wording (read-only) whenever a template is picked.
+  function showTemplate(pick, box, vars){
+    const $opt = $(pick).find("option:selected");
+    const body = $opt.data("body");
+    if (!body){
+      $(box).html('<span class="text-muted-2">Pick a template to see its wording.</span>');
+      $(vars).text("");
+      return;
+    }
+    $(box).text(body);
+    const v = ($opt.data("vars") || "").toString();
+    $(vars).html(v
+      ? 'Filled per recipient: ' + v.split(", ").map(function(n, i){
+          return '<span class="ga-chip">{{' + (i + 1) + '}} = ' + GA.esc(n) + '</span>';
+        }).join("")
+      : "This template has no variables — every recipient gets identical text.");
+  }
+  $("#t-swa-pick").on("change", function(){
+    showTemplate(this, "#t-swa-body", "#swa-vars");
+  });
+  $("#t-wa-pick").on("change", function(){
+    showTemplate(this, "#t-wa-body", "#wa-vars");
+  });
+
+  /* ---------------- recipients ---------------- */
+  function clearRecipients(){
+    rows = []; selected.clear(); table = null;
+    $("#recipients").html('<div class="ga-empty"><i class="fa-solid fa-user-group"></i>' +
+      'Filters changed — press <b>Find students</b> again.</div>');
+    $("#count-pill").text(0);
+    $("#btn-send").prop("disabled", true);
+    $("#email-note, #wa-note").text("");
+  }
+  $("#f-threshold, #f-start, #f-end, #f-batch, #f-department, #f-subject").on("change", clearRecipients);
+
+  $("#btn-find").on("click", function(){
+    if (scope === "SUBJECT" && !$("#f-subject").val()){
+      GA.toast("Choose a subject first.", "warn"); return;
+    }
+    const $btn = $(this); GA.btnBusy($btn, true, "Checking…");
+    GA.get("{% url 'notifications:api_recipients' %}", params())
+      .done(function(res){
+        const d = res.data;
+        rows = d.rows;
+        selected = new Set(rows.map(r => r.student_id));
+        $("#count-pill").text(d.count);
+        $("#range-note").text(d.range);
+        $("#email-note").text(d.emailable + " of " + d.count + " have an activated account");
+        $("#wa-note").html(d.missing_guardians
+          ? '<span class="text-danger">' + d.missing_guardians + " have no usable guardian number</span>"
+          : d.reachable_guardians + " guardian number(s) on record");
+        $("#swa-note").html(d.missing_student_numbers
+          ? '<span class="text-danger">' + d.missing_student_numbers + " have no usable mobile number</span>"
+          : d.reachable_students + " student number(s) on record");
+        $("#preview-student").html('<option value="">First recipient</option>' +
+          rows.map(r => '<option value="' + r.student_id + '">' + GA.esc(r.name) +
+            " — " + r.percentage.toFixed(1) + "%</option>").join(""));
+        renderRecipients();
+        if (!d.count) GA.toast("Nobody is below " + d.threshold + "% in this range.", "info");
+        if (d.capped) GA.toast("More than " + d.max_per_send +
+          " students matched — narrow the filters or untick some rows.", "warn");
+      })
+      .always(()=> GA.btnBusy($btn, false));
+  });
+
+  function renderRecipients(){
+    table = GA.table("#recipients", {
+      perPage: 10, rows: rows,
+      empty: "Nobody is below the threshold for these filters. 🎉",
+      columns: [
+        { key:"student_id", label:"", sortable:false, width:"34px", render:v=>
+          '<input type="checkbox" class="form-check-input pick" value="' + v + '"' +
+          (selected.has(v) ? " checked" : "") + ">" },
+        { key:"name", label:"Student", render:(v,r)=>
+          '<div class="d-flex align-items-center gap-2">' + GA.avatar(v) +
+          '<div><div class="fw-600">' + GA.esc(v) + "</div><small class=\"text-muted-2\">" +
+          GA.esc(r.roll || r.email) + " · " + GA.esc(r.batch) + "</small></div></div>" },
+        { key:"percentage", label:"Attendance", width:"150px", render:v=>GA.bar(v) },
+        { key:"attended", label:"Att/Held", className:"text-center", render:(v,r)=> v + " / " + r.held },
+        { key:"student_number", label:"Student no.", render:(v,r)=> v
+          ? '<span class="ga-pill pill-green"><i class="fa-brands fa-whatsapp"></i>' + GA.esc(v) + "</span>"
+          : '<span class="ga-pill pill-amber" title="' + GA.esc(r.student_error) +
+            '"><i class="fa-solid fa-triangle-exclamation"></i>' +
+            (r.student_mobile ? "invalid" : "missing") + "</span>" },
+        { key:"guardian_number", label:"Guardian no.", render:(v,r)=> v
+          ? '<span class="ga-pill pill-green"><i class="fa-brands fa-whatsapp"></i>' + GA.esc(v) + "</span>"
+          : '<span class="ga-pill pill-amber" title="' + GA.esc(r.guardian_error) +
+            '"><i class="fa-solid fa-triangle-exclamation"></i>' +
+            (r.guardian_mobile ? "invalid" : "missing") + "</span>" }
+      ],
+      onRender: function($host){
+        $host.find(".pick").on("change", function(){
+          // const id = parseInt(this.value, 10);
+          const id = this.value;
+          this.checked ? selected.add(id) : selected.delete(id);
+          syncCount();
+        });
+      }
+    });
+    syncCount();
+  }
+
+  function syncCount(){
+    $("#count-pill").text(selected.size);
+    $("#btn-send").prop("disabled", selected.size === 0);
+  }
+
+  $("#btn-all").on("click", function(){
+    selected = new Set(rows.map(r => r.student_id));
+    if (table) table.refresh();
+    syncCount();
+  });
+  $("#btn-none").on("click", function(){
+    selected.clear();
+    if (table) table.refresh();
+    syncCount();
+  });
+
+  /* ---------------- preview ---------------- */
+  function drafts(){
+    return {
+      email_subject: $("#t-email-subject").val(),
+      email_body: $("#t-email-body").val(),
+      // WhatsApp wording is not editable — only the approved template id travels.
+      student_template: $("#t-swa-pick").val() || "",
+      guardian_template: $("#t-wa-pick").val() || ""
+    };
+  }
+
+  function bubble(heading, error, skipNote, body){
+    return '<div class="mb-3"><div class="fs-12 fw-600 text-muted-2 mb-1">' +
+      '<i class="fa-brands fa-whatsapp text-success me-1"></i>' + heading.toUpperCase() + "</div>" +
+      (error ? '<div class="alert alert-warning fs-12 py-2">' + GA.esc(error) +
+        " — " + skipNote + ".</div>" : "") +
+      '<div class="border rounded-3 p-3" style="background:#e7ffdb;white-space:pre-wrap;font-size:.86rem">' +
+      GA.esc(body) + "</div></div>";
+  }
+
+  $("#btn-preview").on("click", function(){
+    if (!rows.length){ GA.toast("Find recipients first.", "warn"); return; }
+    const $btn = $(this); GA.btnBusy($btn, true, "Rendering…");
+    GA.post("{% url 'notifications:api_preview' %}",
+      $.extend({student: $("#preview-student").val()}, params(), drafts()))
+      .done(function(res){
+        const d = res.data;
+        let warn = "";
+        if (d.unknown.length) warn =
+          '<div class="alert alert-warning fs-13"><i class="fa-solid fa-triangle-exclamation me-1"></i>' +
+          "Unrecognised placeholder(s): <b>" + d.unknown.map(GA.esc).join(", ") +
+          "</b> — these will be sent as-is. Check the spelling.</div>";
+        $("#preview-out").html(warn +
+          '<div class="mb-3"><div class="fs-12 fw-600 text-muted-2 mb-1">' +
+          '<i class="fa-solid fa-envelope me-1"></i>EMAIL TO ' + GA.esc(d.email_to).toUpperCase() + "</div>" +
+          '<div class="border rounded-3 p-3 bg-white">' +
+          '<div class="fw-bold border-bottom pb-2 mb-2">' + GA.esc(d.email_subject) + "</div>" +
+          '<div style="white-space:pre-wrap;font-size:.86rem">' + GA.esc(d.email_body) + "</div></div></div>" +
+          bubble("WHATSAPP TO STUDENT " + GA.esc(d.student_whatsapp_to || "—") +
+                 (d.student_template ? " · " + GA.esc(d.student_template) : ""),
+                 d.student_whatsapp_error, "this student will be skipped", d.student_whatsapp_body) +
+          bubble("WHATSAPP TO GUARDIAN " + GA.esc(d.whatsapp_to || "—") +
+                 (d.guardian_template ? " · " + GA.esc(d.guardian_template) : ""),
+                 d.whatsapp_error, "this student's guardian will be skipped", d.whatsapp_body));
+      })
+      .always(()=> GA.btnBusy($btn, false));
+  });
+  $('[data-bs-target="#tab-preview"]').on("shown.bs.tab", function(){
+    if (rows.length && $("#preview-out .ga-empty").length) $("#btn-preview").trigger("click");
+  });
+
+  /* ---------------- send ---------------- */
+  $("#btn-send").on("click", function(){
+    const email = $("#ch-email").is(":checked"),
+          swa = $("#ch-student-wa").is(":checked"),
+          wa = $("#ch-whatsapp").is(":checked");
+    if (!email && !swa && !wa){ GA.toast("Pick at least one channel.", "warn"); return; }
+    if (swa && !$("#t-swa-pick").val()){
+      GA.toast("Choose an approved template on the Student WhatsApp tab.", "warn");
+      $('[data-bs-target="#tab-swa"]').tab("show"); return;
+    }
+    if (wa && !$("#t-wa-pick").val()){
+      GA.toast("Choose an approved template on the Guardian WhatsApp tab.", "warn");
+      $('[data-bs-target="#tab-wa"]').tab("show"); return;
+    }
+
+    let body = "<b>" + selected.size + "</b> student(s) will be contacted via " +
+      [email ? "email" : null, swa ? "their own WhatsApp" : null,
+       wa ? "guardian WhatsApp" : null].filter(Boolean).join(", ") + ".";
+    const chosen = rows.filter(r => selected.has(r.student_id));
+    const noStudentNo = chosen.filter(r => !r.student_number).length;
+    const noGuardian = chosen.filter(r => !r.guardian_number).length;
+    if (swa && noStudentNo) body += "<br><span class='text-danger'>" + noStudentNo +
+      " have no usable mobile number and will be skipped.</span>";
+    if (wa && noGuardian) body += "<br><span class='text-danger'>" + noGuardian +
+      " have no usable guardian number and will be skipped.</span>";
+
+    GA.confirm({
+      title: "Send alerts now?", body: body, variant: "primary",
+      icon: "fa-paper-plane", confirmText: "Send"
+    }).done(function(){
+      const $btn = $("#btn-send"); GA.btnBusy($btn, true, "Sending…");
+      const payload = $.extend({
+        email_students: email ? "1" : "0",
+        whatsapp_students: swa ? "1" : "0",
+        whatsapp_guardians: wa ? "1" : "0",
+        // jQuery serialises an array value as students[]=1&students[]=2,
+        // which Django reads back with getlist("students[]").
+        students: Array.from(selected)
+      }, params(), drafts());
+      GA.post("{% url 'notifications:api_send' %}", payload, {loader:true})
+        .done(function(res){ showResult(res.data.campaign_id); })
+        .always(()=> GA.btnBusy($btn, false));
+    });
+  });
+
+  function showResult(id){
+    GA.get("/alerts/api/campaigns/" + id + "/").done(function(res){
+      const c = res.data.campaign;
+      $("#result-counts").html([
+        ["Recipients", c.recipients, "bg-grad-2"], ["Emails", c.email_sent, "bg-grad-1"],
+        ["WA → student", c.student_whatsapp_sent, "bg-grad-3"],
+        ["WA → guardian", c.whatsapp_sent, "bg-grad-3"],
+        ["Failed", c.failed, "bg-grad-5"], ["Skipped", c.skipped, "bg-grad-4"]
+      ].map(x => '<div class="col-6 col-md"><div class="card"><div class="card-body py-2 text-center">' +
+        '<div class="fw-bold fs-4 lh-1">' + x[1] + "</div>" +
+        '<small class="text-muted-2 fs-12">' + x[0] + "</small></div></div></div>").join(""));
+      GA.table("#result-table", { perPage: 12, rows: res.data.rows, empty: "No deliveries.", columns: [
+        { key:"student", label:"Student", render:v=>'<span class="fw-600">' + GA.esc(v) + "</span>" },
+        { key:"roll", label:"Class roll" },
+        { key:"channel", label:"Channel", render:v=> v === "EMAIL"
+          ? '<span class="ga-pill pill-blue"><i class="fa-solid fa-envelope"></i>Email</span>'
+          : v === "WA_STUDENT"
+          ? '<span class="ga-pill pill-green"><i class="fa-brands fa-whatsapp"></i>Student</span>'
+          : '<span class="ga-pill pill-violet"><i class="fa-brands fa-whatsapp"></i>Guardian</span>' },
+        { key:"target", label:"Sent to" },
+        { key:"percentage", label:"%", render:v=>GA.pctPill(v) },
+        { key:"status", label:"Status", render:v=> v === "SENT"
+          ? '<span class="ga-pill pill-green"><i class="fa-solid fa-check"></i>Sent</span>'
+          : v === "FAILED" ? '<span class="ga-pill pill-red"><i class="fa-solid fa-xmark"></i>Failed</span>'
+          : '<span class="ga-pill pill-amber"><i class="fa-solid fa-forward"></i>Skipped</span>' },
+        { key:"error", label:"Note", render:v=> v ? '<small class="text-danger">' + GA.esc(v) + "</small>" : "" }
+      ]});
+      new bootstrap.Modal("#result-modal").show();
+    });
+  }
+
+  /* ---------------- history ---------------- */
+  $("#history-modal").on("shown.bs.modal", function(){
+    GA.get("{% url 'notifications:api_campaigns' %}").done(function(res){
+      GA.table("#history-table", { perPage: 10, rows: res.data.rows,
+        empty: "No alerts have been sent yet.",
+        onRowClick: (r)=> showResult(r.id),
+        columns: [
+          { key:"when", label:"When" },
+          { key:"scope", label:"Type" },
+          { key:"subject", label:"Subject" },
+          { key:"threshold", label:"Below", render:v=>v + "%" },
+          { key:"range", label:"Period" },
+          { key:"by", label:"Sent by" },
+          { key:"channels", label:"Channels" },
+          { key:"recipients", label:"Students", className:"text-center" },
+          { key:"email_sent", label:"Emails", className:"text-center" },
+          { key:"student_whatsapp_sent", label:"WA→student", className:"text-center" },
+          { key:"whatsapp_sent", label:"WA→guardian", className:"text-center" },
+          { key:"failed", label:"Failed", className:"text-center", render:v=>
+            v ? '<span class="text-danger fw-600">' + v + "</span>" : "0" }
+        ]});
+    });
+  });
+
+  {% if user.is_head or user.is_hod %}
+  $("#test-form").on("submit", function(e){
+    e.preventDefault();
+    GA.submit($(this), { url:"{% url 'notifications:api_whatsapp_test' %}",
+      busyText:"Sending…", onSuccess:function(){} });
+  });
+  {% endif %}
+
+  // A channel with no approved template cannot be used at all.
+  if (!$("#t-swa-pick").length) $("#ch-student-wa").prop({checked:false, disabled:true});
+  if (!$("#t-wa-pick").length)  $("#ch-whatsapp").prop({checked:false, disabled:true});
+
+  loadDefaults();
+});
+</script>
+{% endblock %}

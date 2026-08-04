@@ -1,0 +1,4 @@
+Welcome, {{ user.short_name }}!
+
+Your {{ user.get_role_display }} account is active. Sign in with {{ user.email }}:
+{{ login_url }}

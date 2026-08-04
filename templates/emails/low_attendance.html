@@ -1,0 +1,13 @@
+{% extends "emails/base_email.html" %}{% block content %}
+<h2 style="margin:0 0 8px;font-size:19px">Attendance below {{ threshold }}%</h2>
+<p style="color:#475569;font-size:14px">Hi {{ user.short_name }}, your attendance needs attention:</p>
+<table style="width:100%;border-collapse:collapse;font-size:13px">
+  <tr style="background:#f8fafc"><th align="left" style="padding:8px">Subject</th>
+    <th align="center" style="padding:8px">Attended</th><th align="center" style="padding:8px">Held</th>
+    <th align="center" style="padding:8px">%</th></tr>
+  {% for r in rows %}<tr style="border-top:1px solid #e2e8f0">
+    <td style="padding:8px">{{ r.code }}</td><td align="center" style="padding:8px">{{ r.attended }}</td>
+    <td align="center" style="padding:8px">{{ r.held }}</td>
+    <td align="center" style="padding:8px;color:#ef4444;font-weight:700">{{ r.percentage }}%</td></tr>{% endfor %}
+</table>
+{% endblock %}

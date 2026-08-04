@@ -1,0 +1,66 @@
+# fly.toml app configuration file generated for geoattend on 2026-08-03T12:37:25+05:30
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'geoattend'
+primary_region = 'sin'
+kill_signal = 'SIGTERM'
+kill_timeout = '5s'
+console_command = 'python manage.py shell'
+
+[build]
+  dockerfile = 'Dockerfile'
+  ignorefile = '.dockerignore'
+
+[deploy]
+  strategy = 'immediate'
+  wait_timeout = '5m0s'
+  # Runs once, in its own short-lived machine, before the new version goes
+  # live. Putting migrate in start.sh instead would run it on every machine at
+  # once — and min_machines_running is 2, so two of them would race.
+  release_command = 'python manage.py migrate --noinput'
+
+[env]
+  PORT = '8080'
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = 'off'
+  auto_start_machines = true
+  min_machines_running = 2
+
+  [http_service.concurrency]
+    type = 'requests'
+    soft_limit = 600
+
+  [http_service.http_options]
+    idle_timeout = 600
+
+  [[http_service.checks]]
+    interval = '1m0s'
+    timeout = '1m0s'
+    grace_period = '30s'
+    method = 'GET'
+    path = '/health/'
+    protocol = 'http'
+
+    # The check talks to the container directly, so without these two headers
+    # it is answered with a 301 to https (which Fly does not follow, and reads
+    # as a failure) and a 400 DisallowedHost from a strict ALLOWED_HOSTS.
+    [http_service.checks.headers]
+      X-Forwarded-Proto = 'https'
+      Host = 'geoattend.fly.dev'
+
+[[vm]]
+  memory = '1gb'
+  cpus = 1
+  memory_mb = 1024
+
+# STATIC_ROOT is BASE_DIR/staticfiles and WORKDIR is /code, so collectstatic
+# writes here. The old path (/code/assets/staticfiles) does not exist, and the
+# proxy answers /static/ itself — so every asset 404'd before reaching Django.
+[[statics]]
+  guest_path = '/code/staticfiles'
+  url_prefix = '/static/'

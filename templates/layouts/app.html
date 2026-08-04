@@ -1,0 +1,75 @@
+{% extends "layouts/base.html" %}
+{% load static %}
+
+{% block body %}
+<div class="ga-shell">
+
+  <aside class="ga-sidebar">
+    <div class="ga-side-head">
+      <div class="d-flex align-items-center gap-2">
+        <i class="fa-solid fa-location-crosshairs fa-lg text-info"></i>
+        <div>
+          <div class="ga-brand name">
+           <a href="{% url 'landing' %}" style="text-decoration: none;">{{ SITE_NAME }}</a>
+          </div>
+          <div class="sub">{{ user.institute.code|default:"Attendance" }}</div>
+        </div>
+      </div>
+    </div>
+
+    <nav class="ga-nav">
+      {% include "partials/nav.html" %}
+    </nav>
+
+    <div class="ga-side-foot">
+      <div class="d-flex align-items-center gap-2">
+        <div class="ga-avatar">{{ user.initials }}</div>
+        <div class="flex-grow-1 min-w-0">
+          <div class="text-white fw-600 text-truncate" style="font-size:.85rem">{{ user.get_full_name }}</div>
+          <div class="text-truncate" style="font-size:.72rem;color:#7c8db5">{{ user.get_role_display }}</div>
+        </div>
+        <a href="{% url 'accounts:logout' %}" class="text-secondary" title="Sign out"
+           data-bs-toggle="tooltip"><i class="fa-solid fa-right-from-bracket"></i></a>
+      </div>
+    </div>
+  </aside>
+
+  <div class="ga-main">
+    <header class="ga-topbar">
+      <button class="btn btn-sm btn-light d-lg-none" id="ga-menu-toggle"><i class="fa-solid fa-bars"></i></button>
+      <div class="flex-grow-1 min-w-0">
+        <h1 class="ga-page-title text-truncate">{% block page_title %}Dashboard{% endblock %}</h1>
+        <p class="ga-page-sub d-none d-sm-block text-truncate">{% block page_sub %}{% endblock %}</p>
+      </div>
+      <div class="d-flex align-items-center gap-2">
+        {% block topbar_actions %}{% endblock %}
+        <div class="dropdown">
+          <button class="btn btn-sm btn-light d-flex align-items-center gap-2" data-bs-toggle="dropdown">
+            <div class="ga-avatar sm">{{ user.initials }}</div>
+            <span class="d-none d-md-inline fw-600">{{ user.short_name }}</span>
+            <i class="fa-solid fa-chevron-down fs-12 text-muted-2"></i>
+          </button>
+          <ul class="dropdown-menu dropdown-menu-end shadow-sm">
+            <li><h6 class="dropdown-header">{{ user.email }}</h6></li>
+            <li><a class="dropdown-item" href="{% url 'accounts:profile' %}"><i class="fa-solid fa-user me-2 text-muted-2"></i>My profile</a></li>
+            {% if user.is_student %}
+            <li><a class="dropdown-item" href="{% url 'attendance:my_attendance' %}"><i class="fa-solid fa-calendar-check me-2 text-muted-2"></i>My attendance</a></li>
+            {% endif %}
+            <li><hr class="dropdown-divider"></li>
+            <li><a class="dropdown-item text-danger" href="{% url 'accounts:logout' %}"><i class="fa-solid fa-right-from-bracket me-2"></i>Sign out</a></li>
+          </ul>
+        </div>
+      </div>
+    </header>
+
+    <main class="ga-content">
+      {% block content %}{% endblock %}
+    </main>
+
+    {% include "partials/footer.html" %}
+  </div>
+</div>
+{% endblock %}
+
+{# Rendered above, inside .ga-main — suppress the copy base.html would add. #}
+{% block footer %}{% endblock %}

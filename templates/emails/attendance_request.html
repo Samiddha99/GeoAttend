@@ -1,0 +1,16 @@
+{% extends "emails/base_email.html" %}{% block content %}
+<h2 style="margin:0 0 8px;font-size:19px">Attendance is open — {{ session.subject.code }}</h2>
+<p style="color:#475569;font-size:14px;margin:0 0 16px">
+  Hi {{ student.name }}, {{ session.teacher.get_full_name }} has opened attendance for
+  <b>{{ session.subject.name }}</b> ({{ session.batch.label }}).
+</p>
+<table style="width:100%;background:#f8fafc;border-radius:10px;margin:0 0 18px">
+  <tr><td style="font-size:13px;color:#334155;padding:8px 12px">⏳ Valid for about <b>{{ minutes }} minute(s)</b></td></tr>
+  <tr><td style="font-size:13px;color:#334155;padding:8px 12px">📍 You must be within <b>{{ radius }} m</b> of the classroom</td></tr>
+</table>
+<div style="text-align:center;margin:24px 0">
+  <a href="{{ mark_url }}" style="background:#10b981;color:#fff;text-decoration:none;padding:14px 32px;
+     border-radius:10px;font-weight:700;font-size:15px;display:inline-block">Mark me present</a>
+</div>
+<p style="color:#64748b;font-size:12px;word-break:break-all">{{ mark_url }}</p>
+{% endblock %}

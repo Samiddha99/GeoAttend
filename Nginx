@@ -1,0 +1,29 @@
+# https://docs.gunicorn.org/en/stable/deploy.html#id5
+
+worker_processes 2;
+
+user root www-data;
+
+events {
+  worker_connections 1024; # increase if you have lots of clients
+  accept_mutex on; # set to 'on' if nginx worker_processes > 1
+#   use epoll; # to enable for Linux 2.6+
+#   use kqueue; # to enable for FreeBSD, OSX
+}
+
+http {
+    server {
+        listen 80;
+        server_name www.geoattend.fly.dev;
+
+        location = /favicon.ico { access_log on; log_not_found on; }
+        location /static/ {
+            root /code/assets/staticfiles;
+        }
+
+        location / {
+            include proxy_params;
+            proxy_pass http://unix:/run/gunicorn.sock;
+        }
+    }
+}
