@@ -25,6 +25,7 @@ import re
 
 from django.db import transaction
 
+from accounts.emails import send_invitation
 from accounts.services import invite_user
 from core.utils import normalise_email, parse_batch_label
 
@@ -200,7 +201,7 @@ def _split_subjects(value):
 
 @transaction.atomic
 def import_students(rows, department, uploader, file_name="roster.xlsx",
-                    create_missing_batches=True, send_invites=True):
+                    create_missing_batches=False, send_invites=True):
     """
     Validate & persist a parsed roster.  Returns an ImportJob with a per-row report.
     Nothing is written unless the whole file parses (atomic).
@@ -291,10 +292,17 @@ def import_students(rows, department, uploader, file_name="roster.xlsx",
             start, end, label = parsed
             batch = batch_cache.get(label.lower())
         if batch is None:
+            # Creating batches from a spreadsheet used to be the default, which
+            # meant a typo — 2022-27 for 2022-26 — silently produced a second
+            # cohort and split a class in two. Nobody sees that until the
+            # attendance figures stop adding up.
             if not create_missing_batches:
                 errors += 1
-                report.append({"row": line, "email": email, "status": "error",
-                               "messages": [f"batch {label} does not exist"]})
+                report.append({
+                    "row": line, "email": email, "status": "error",
+                    "messages": [f"batch {label} does not exist — create it under "
+                                 "Batches first, or correct the spelling"],
+                })
                 continue
             batch = Batch.objects.create(
                 department=department, label=label, start_year=start, end_year=end
@@ -324,11 +332,25 @@ def import_students(rows, department, uploader, file_name="roster.xlsx",
                 f"Batch: {label}",
                 "Subjects: " + ", ".join(s.code for s in matched),
             ],
-            send=send_invites,
+            # Never from inside: whether to email is decided below, on whether
+            # this row produced a new account.
+            send=False,
         )
         if invitation is None and user.registration_completed:
             # Existing active student — just refresh their enrolment data.
             was_created = False
+
+        # Only a genuinely new account gets an invitation. A sheet of email +
+        # guardian mobile is a routine bulk edit, and it used to re-mail an
+        # invitation link to every student who had not yet activated — every
+        # time it was uploaded. An address that changed arrives here as a new
+        # account anyway, so it is covered by the same rule.
+        invited = bool(send_invites and was_created and invitation is not None)
+        if invited:
+            send_invitation(invitation, extra_lines=[
+                f"Batch: {label}",
+                "Subjects: " + ", ".join(s.code for s in matched),
+            ])
 
         # Blank cell = leave it alone. Without this a sheet of just
         # email + guardian mobile would erase every other field on the row.
@@ -377,6 +399,9 @@ def import_students(rows, department, uploader, file_name="roster.xlsx",
             "guardian_mobile": profile.guardian_mobile,
             "subjects": [s.code for s in matched] or
                         [e.subject.code for e in profile.enrollments.filter(is_active=True)],
+            # Shown in the preview so "who will be emailed" is visible before
+            # anything is sent, not discovered afterwards.
+            "invited": invited,
             "status": status, "messages": [],
         })
 

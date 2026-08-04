@@ -79,6 +79,10 @@ INSTALLED_APPS = [
     "dashboard.apps.DashboardConfig",
     "notifications.apps.NotificationsConfig",
     "core.apps.CoreConfig",
+    # Serves the face-matching WebSocket. No channel layer is configured
+    # because none is needed: each socket talks only to itself, so there is
+    # nothing to broadcast and no Redis to run.
+    "channels",
     # 'boto',
     'cloud_storages',
     'sri', #Subresource Integrity
@@ -98,6 +102,10 @@ MIDDLEWARE = [
     # redirects those middlewares issue.
     "core.middleware.NoStoreMiddleware",
     "accounts.middleware.ForceProfileCompletionMiddleware",
+    # After profile completion, never before: a student without a password has
+    # an earlier step to finish, and two gates redirecting at each other would
+    # trap them in a loop.
+    "accounts.middleware.ForceFaceEnrolmentMiddleware",
     "accounts.middleware.ActivityTrackingMiddleware",
     "core.middleware.AjaxExceptionMiddleware",
 ]
@@ -340,6 +348,80 @@ ATTENDANCE = {
     # with no attachment is still a valid reason. 0 files turns it off.
     "ATTACHMENT_MAX_FILES": env_int("ABSENCE_ATTACHMENT_MAX_FILES", 5),
     "ATTACHMENT_MAX_TOTAL_MB": env_int("ABSENCE_ATTACHMENT_MAX_TOTAL_MB", 20),
+}
+
+# --------------------------------------------------------------------------- #
+#  Face enrolment
+# --------------------------------------------------------------------------- #
+# Thresholds worth tuning on your own students rather than trusting these.
+# Capture a set of genuine and impostor pairs from real classroom conditions,
+# look at where they fall, and move the numbers to suit — a value copied from
+# a benchmark says nothing about your cameras or your lighting.
+FACE = {
+    "ENABLED": env_bool("FACE_ENROLMENT_ENABLED", True),
+    # "buffalo_s" is the small pack: lighter on a shared CPU. "buffalo_l" is
+    # more accurate and worth it on better hardware.
+    "MODEL_PACK": env("FACE_MODEL_PACK", "buffalo_s"),
+    "MAX_IMAGE_SIDE": env_int("FACE_MAX_IMAGE_SIDE", 1600),
+    "MAX_IMAGE_MB": env_int("FACE_MAX_IMAGE_MB", 5),
+    # Detector confidence and how much of the frame the face must fill.
+    "MIN_DETECT_SCORE": float(env("FACE_MIN_DETECT_SCORE", "0.6")),
+    "MIN_FACE_PX": env_int("FACE_MIN_FACE_PX", 110),
+    # How far the head must turn for a "left"/"right" capture to count, and how
+    # straight "front" has to be.
+    # The capture page holds a tighter window than these. That is deliberate:
+    # the page decides what a good capture looks like, and the server only has
+    # to agree that the head is plausibly turned the right way. Matching the
+    # two exactly would mean any small disagreement between the two measuring
+    # methods rejected a capture the student had already got right.
+    "FRONT_MAX_YAW": env_int("FACE_FRONT_MAX_YAW", 14),
+    "TURN_MIN_YAW": env_int("FACE_TURN_MIN_YAW", 12),
+    "TURN_MAX_YAW": env_int("FACE_TURN_MAX_YAW", 55),
+    # Occlusion heuristics — see accounts/face.py for what these actually
+    # measure. Lower means more permissive.
+    "MIN_EYE_ENERGY": float(env("FACE_MIN_EYE_ENERGY", "0.55")),
+    "MIN_MOUTH_ENERGY": float(env("FACE_MIN_MOUTH_ENERGY", "0.45")),
+    # All three captures must be the same person.
+    "SAME_PERSON_MIN": float(env("FACE_SAME_PERSON_MIN", "0.45")),
+
+    # --- live verification while marking attendance ------------------------ #
+    "LIVE_ENABLED": env_bool("FACE_LIVE_ENABLED", True),
+    # Smaller detector input than enrolment: the browser crops to the face
+    # before sending, and this number is the main dial on how many frames a
+    # second the server can keep up with.
+    "LIVE_DET_SIZE": env_int("FACE_LIVE_DET_SIZE", 320),
+    "LIVE_MIN_DETECT_SCORE": float(env("FACE_LIVE_MIN_DETECT_SCORE", "0.5")),
+    "LIVE_MIN_FACE_PX": env_int("FACE_LIVE_MIN_FACE_PX", 80),
+    # Cosine similarity against the best of the three enrolment vectors.
+    # Measure this on your own students before trusting it: too low lets a
+    # sibling through, too high locks out anyone who grew a beard.
+    "MATCH_MIN": float(env("FACE_MATCH_MIN", "0.42")),
+    # How long a student may keep trying before the teacher fallback appears,
+    # and how long the ticket that authorises the attempt stays valid.
+    "LIVE_TICKET_SECONDS": env_int("FACE_LIVE_TICKET_SECONDS", 180),
+    "LIVE_FALLBACK_AFTER_SEC": env_int("FACE_LIVE_FALLBACK_AFTER_SEC", 45),
+    "LIVE_MAX_FRAMES": env_int("FACE_LIVE_MAX_FRAMES", 400),
+    # How many frames the whole process will work on at once. The bottleneck is
+    # CPU, not the network: past this, extra sockets are told to wait rather
+    # than queueing work nobody will still be waiting for.
+    "LIVE_MAX_CONCURRENT": env_int("FACE_LIVE_MAX_CONCURRENT", 2),
+    "LIVE_MAX_FRAME_BYTES": env_int("FACE_LIVE_MAX_FRAME_BYTES", 400 * 1024),
+
+    # --- passive anti-spoofing -------------------------------------------- #
+    # Path to an ONNX liveness model (MiniFASNet and friends). Not bundled:
+    # these carry their own licences and their own input conventions, so the
+    # size and which output means "real" are settings too.
+    #
+    # With no model configured, liveness is UNKNOWN, not "fine" — and
+    # ANTISPOOF_REQUIRED decides whether marking proceeds anyway. Leaving it
+    # required and unconfigured stops face marking outright, which is the
+    # honest default: a photograph passes every other check in the pipeline.
+    "ANTISPOOF_MODEL": env("FACE_ANTISPOOF_MODEL", ""),
+    "ANTISPOOF_REQUIRED": env_bool("FACE_ANTISPOOF_REQUIRED", False),
+    "ANTISPOOF_INPUT": env_int("FACE_ANTISPOOF_INPUT", 80),
+    "ANTISPOOF_PAD": float(env("FACE_ANTISPOOF_PAD", "0.4")),
+    "ANTISPOOF_REAL_INDEX": env_int("FACE_ANTISPOOF_REAL_INDEX", 1),
+    "ANTISPOOF_MIN": float(env("FACE_ANTISPOOF_MIN", "0.6")),
 }
 
 # --------------------------------------------------------------------------- #

@@ -1,5 +1,7 @@
 import csv
 
+from django.conf import settings
+
 from django.contrib.auth.decorators import login_required
 from django.db.models import Count, Q
 from django.http import FileResponse, Http404, HttpResponse
@@ -20,11 +22,13 @@ from core.decorators import role_required
 from core.http import fail, ok
 from core.utils import clean_object_id, clean_object_ids, parse_date
 
+from .live import decide_manual_mark, issue_ticket
 from .models import (
     AbsenceAttachment,
     AbsenceReason,
     AttendanceRecord,
     AttendanceSession,
+    ManualMarkRequest,
     MarkAttempt,
     PlannedAbsence,
     PlannedAbsenceDecision,
@@ -33,6 +37,7 @@ from .services import (
     CONF,
     AttendanceError,
     can_view_attachment,
+    check_mark_allowed,
     create_session,
     manual_mark,
     mark_attendance,
@@ -46,6 +51,7 @@ from .services import (
 )
 
 HEAD, HOD, TEACHER, STUDENT = "HEAD", "HOD", "TEACHER", "STUDENT"
+CONF_FACE = settings.FACE
 
 
 def _visible_sessions(user):
@@ -171,6 +177,7 @@ def api_session_status(request, pk):
         "student_id": r.student_id,
         "name": r.student.name,
         "roll": r.student.class_roll,
+        "exam_roll": r.student.exam_roll,
         "email": r.student.email,
         "at": timezone.localtime(r.marked_at).strftime("%H:%M:%S"),
         "distance": round(r.distance_m, 1) if r.distance_m is not None else None,
@@ -178,7 +185,8 @@ def api_session_status(request, pk):
         "remark": r.remark,
     } for r in records]
     absent = [{
-        "student_id": s.id, "name": s.name, "roll": s.class_roll, "email": s.email,
+        "student_id": s.id, "name": s.name, "roll": s.class_roll,
+        "exam_roll": s.exam_roll, "email": s.email,
     } for s in roster if s.id not in present_ids]
     return ok({
         "id": session.id,
@@ -191,6 +199,21 @@ def api_session_status(request, pk):
         "percentage": round(len(present) * 100.0 / session.expected_count, 1) if session.expected_count else 0,
         "present": present,
         "absent": absent,
+        # Students the camera could not place. They are inside the geo-fence,
+        # so this is a question of identity, not presence — and the teacher is
+        # looking right at them.
+        "manual_requests": [{
+            "id": m.id,
+            "student_id": m.student_id,
+            "name": m.student.name,
+            "roll": m.student.class_roll,
+            "exam_roll": m.student.exam_roll,
+            "reason": m.reason,
+            "attempts": m.attempts,
+            "best_score": m.best_score,
+            "at": timezone.localtime(m.created_at).strftime("%H:%M:%S"),
+        } for m in session.manual_requests.select_related("student", "student__user")
+            .filter(status=ManualMarkRequest.Status.PENDING)],
         "url": session.mark_url,
         "radius": session.radius_m,
         "subject": f"{session.subject.code} — {session.subject.name}",
@@ -322,8 +345,26 @@ def api_session_export(request, pk):
 @require_GET
 def api_session_attempts(request, pk):
     session = get_object_or_404(_visible_sessions(request.user), pk=pk)
-    rows = [{
+    def rolls(user):
+        """
+        The rolls behind a blocked attempt.
+
+        A MarkAttempt points at a User, not a StudentProfile, and an attempt
+        can come from someone with no profile at all — a teacher opening the
+        link, or an account mid-registration. Hence the guard rather than a
+        select_related that would only work most of the time.
+        """
+        profile = getattr(user, "student_profile", None) if user else None
+        return (profile.class_roll if profile else "",
+                profile.exam_roll if profile else "")
+
+    rows = []
+    for a in session.attempts.select_related("user", "user__student_profile")[:300]:
+        class_roll, exam_roll = rolls(a.user)
+        rows.append({
         "user": a.user.full_name if a.user else "—",
+        "roll": class_roll,
+        "exam_roll": exam_roll,
         "email": a.user.email if a.user else "",
         "reason": a.get_reason_display(),
         "code": a.reason,
@@ -332,7 +373,7 @@ def api_session_attempts(request, pk):
         "ip": a.ip or "",
         "at": timezone.localtime(a.created_at).strftime("%H:%M:%S"),
         "detail": a.detail,
-    } for a in session.attempts.select_related("user")[:300]]
+        })
     return ok({"rows": rows})
 
 
@@ -362,6 +403,15 @@ def mark_page(request, token):
         # The client refines its GPS fix until it clears the same bar the server
         # enforces, so the two can never drift apart.
         "max_accuracy_m": CONF["MAX_GPS_ACCURACY_M"],
+        # Face verification only runs for a student who has a face on file.
+        # Anyone else falls back to the plain geo-only flow rather than being
+        # shown a camera that can never succeed.
+        "face_live": bool(
+            CONF_FACE.get("LIVE_ENABLED", True)
+            and CONF_FACE.get("ENABLED", True)
+            and getattr(request.user, "face_enrolled", False)
+        ),
+        "face_fallback_after": int(CONF_FACE.get("LIVE_FALLBACK_AFTER_SEC", 45)),
     })
 
 
@@ -762,6 +812,64 @@ def api_planned_decision_review(request, pk):
         request, action="PLANNED_ABSENCE_REVIEWED",
         detail=f"{decision.status} · {decision.planned.student.name} · {decision.subject.code}")
     return ok(message=f"{decision.subject.code} {decision.get_status_display().lower()}.")
+
+
+@login_required
+@require_POST
+def api_mark_start(request, token):
+    """
+    Run every gate except the face, and hand back a ticket for the socket.
+
+    Split from api_mark so the geo-fence is decided over ordinary HTTP, once,
+    before any video starts. The socket then only has to redeem the ticket —
+    which also means a student cannot reach the matching endpoint at all
+    without having been inside the fence when they asked.
+    """
+    session = AttendanceSession.objects.select_related(
+        "subject", "batch").filter(token=token).first()
+    if session is None:
+        return fail("This attendance link is not valid.", status=404, code="INVALID")
+    try:
+        cleared = check_mark_allowed(
+            request=request, session=session,
+            latitude=request.POST.get("latitude"),
+            longitude=request.POST.get("longitude"),
+            accuracy=request.POST.get("accuracy"),
+            client_hash=request.POST.get("device_hash", ""),
+        )
+    except AttendanceError as exc:
+        return fail(exc.message, status=exc.status, code=exc.code, **exc.extra)
+
+    ticket = issue_ticket(session=session, cleared=cleared, request=request)
+    return ok({
+        "ticket": ticket.token,
+        "socket": f"/ws/attendance/mark/{session.token}/",
+        "distance_m": round(cleared["distance"], 1),
+        "fallback_after": int(CONF_FACE.get("LIVE_FALLBACK_AFTER_SEC", 45)),
+        "subject": f"{session.subject.code} — {session.subject.name}",
+    }, message="You are in the classroom. Now let us check it is you.")
+
+
+@role_required(TEACHER, HOD, HEAD)
+@require_POST
+def api_manual_request_decide(request, pk):
+    """The teacher's answer to "the camera does not know me"."""
+    manual = get_object_or_404(
+        ManualMarkRequest.objects.select_related(
+            "session", "session__subject", "student", "student__user"),
+        pk=pk)
+    if manual.session.teacher_id != request.user.id and not (
+            request.user.is_hod or request.user.is_head):
+        return fail("You can only decide requests for your own sessions.", status=403)
+    try:
+        decide_manual_mark(request_obj=manual, teacher=request.user,
+                           approve=request.POST.get("decision") == "approve",
+                           remark=request.POST.get("remark", ""))
+    except AttendanceError as exc:
+        return fail(exc.message, status=exc.status, code=exc.code)
+    ActivityLog.log(request, action="MANUAL_MARK_DECIDED",
+                    detail=f"{manual.status} · {manual.student.name}")
+    return ok(message=f"{manual.student.name}: {manual.get_status_display().lower()}.")
 
 
 @role_required(HEAD, HOD, TEACHER, STUDENT)

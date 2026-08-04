@@ -59,6 +59,14 @@ class User(AbstractBaseUser, PermissionsMixin):
     registration_completed = models.BooleanField(
         default=False, help_text="False until the invitee sets their password."
     )
+    # Denormalised from FaceEnrolment on purpose: the gate middleware reads it
+    # on every request, and a join per request to answer "has this student
+    # enrolled" is a query the app should not be making.
+    face_enrolled = models.BooleanField(
+        default=False,
+        help_text="Student has captured the three enrolment images.",
+    )
+
     # anti proxy-attendance: a student may only mark from their bound device
     device_id = models.CharField(max_length=64, blank=True, db_index=True)
     device_bound_at = models.DateTimeField(null=True, blank=True)
@@ -299,3 +307,86 @@ class ActivityLog(models.Model):
             meta=meta or {},
             ip=ip or None,
         )
+
+
+def face_image_path(instance, filename):
+    """
+    One enrolment image. Foldered per user so a deletion request is a directory
+    operation, and named by pose so a human can tell the three apart. The
+    original filename is discarded — it came from a canvas blob and carries no
+    information worth keeping.
+    """
+    return f"faces/{instance.enrolment.user_id}/{instance.pose.lower()}.jpg"
+
+
+class FaceEnrolment(models.Model):
+    """
+    A student's face on file: three images from three angles, and the vector
+    computed from each.
+
+    One per student. Re-capturing is not self-service — staff clear this first,
+    exactly like unlinking a device — because a student who can re-enrol at will
+    can enrol whoever they like an hour before class.
+    """
+
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="face_enrolment"
+    )
+    created_at = models.DateTimeField(default=timezone.now)
+    # Which model produced the vectors. Embeddings from different models are
+    # not comparable, so a stored name is what lets a future upgrade know which
+    # rows still need recomputing.
+    model_name = models.CharField(max_length=40, blank=True)
+
+    # Cleared and re-armed by staff; kept for the audit trail rather than
+    # deleted, so "who let this student re-enrol, and when" has an answer.
+    reset_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="face_resets_performed",
+    )
+    reset_at = models.DateTimeField(null=True, blank=True)
+    reset_reason = models.CharField(max_length=200, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"Face enrolment · {self.user.email}"
+
+    @property
+    def is_complete(self):
+        return self.samples.count() >= len(FaceSample.Pose.values)
+
+
+class FaceSample(models.Model):
+    """One captured angle, its image, and the vector derived from it."""
+
+    class Pose(models.TextChoices):
+        FRONT = "FRONT", "Looking straight ahead"
+        LEFT = "LEFT", "Turned slightly left"
+        RIGHT = "RIGHT", "Turned slightly right"
+
+    enrolment = models.ForeignKey(
+        FaceEnrolment, on_delete=models.CASCADE, related_name="samples"
+    )
+    pose = models.CharField(max_length=6, choices=Pose.choices)
+    image = models.ImageField(upload_to=face_image_path, max_length=300)
+    # A list of floats. Stored rather than recomputed because extracting one is
+    # ~a second of CPU, and marking attendance cannot afford three of those per
+    # student on top of the live frame.
+    embedding = models.JSONField(default=list)
+    # What the server measured, not what the browser claimed — kept so a
+    # rejected match can be investigated without re-running the model.
+    yaw = models.FloatField(default=0)
+    detect_score = models.FloatField(default=0)
+    captured_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        ordering = ["pose"]
+        constraints = [
+            models.UniqueConstraint(fields=["enrolment", "pose"],
+                                    name="uniq_face_sample_per_pose"),
+        ]
+
+    def __str__(self):
+        return f"{self.enrolment.user.email} · {self.pose}"

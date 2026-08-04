@@ -1,0 +1,457 @@
+{% extends "layouts/base.html" %}
+{% block title %}Capture your face · {{ SITE_NAME }}{% endblock %}
+
+{% block body %}
+<div class="ga-auth">
+  {% include "partials/auth_visual.html" %}
+  <div class="ga-auth-form">
+    <div class="ga-auth-box" style="max-width:520px">
+
+      <div class="text-center mb-3">
+        <h4 class="fw-bold mb-1">Let's put a face to your name</h4>
+        <p class="text-muted-2 fs-13 mb-0">
+          Three quick photos, so nobody else can mark attendance as you.
+          Take off any mask, glasses or cap first.
+        </p>
+      </div>
+
+      <!-- The three steps, so the student can see how far along they are. -->
+      <div class="d-flex justify-content-center gap-2 mb-3" id="steps">
+        <span class="ga-pill pill-grey" data-step="FRONT">1 · Straight ahead</span>
+        <span class="ga-pill pill-grey" data-step="LEFT">2 · Turn left</span>
+        <span class="ga-pill pill-grey" data-step="RIGHT">3 · Turn right</span>
+      </div>
+
+      <div class="ga-face-stage mb-3">
+        <video id="cam" autoplay playsinline muted></video>
+        <div class="ga-face-ring" id="ring"></div>
+        {% comment %}
+          The animated head that shows the move to make.
+
+          Built from layered elements at different depths inside a
+          preserve-3d scene, so rotating the container is a real rotation
+          about the vertical axis: the nose swings across, the far eye
+          compresses toward the edge and an ear comes into view. A 2D
+          rotate() cannot do any of that — it rolls the head sideways, which
+          is a different instruction entirely.
+        {% endcomment %}
+        <div class="ga-face-guide" id="guide" aria-hidden="true">
+          <div class="ga-head3d">
+            <div class="ga-head-scene" id="head-scene">
+              <div class="h-ear left"></div>
+              <div class="h-ear right"></div>
+              <div class="h-face"></div>
+              <div class="h-brow left"></div>
+              <div class="h-brow right"></div>
+              <div class="h-eye left"></div>
+              <div class="h-eye right"></div>
+              <div class="h-nose"></div>
+              <div class="h-mouth"></div>
+            </div>
+          </div>
+          <svg class="ga-head-arrow" viewBox="0 0 120 26" aria-hidden="true">
+            <path id="guide-arrow" d="" fill="none" stroke="currentColor"
+                  stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </div>
+      </div>
+
+      <div class="text-center mb-2">
+        <div class="fw-600" id="instruction">Starting the camera…</div>
+        <div class="text-muted-2 fs-13" id="hint">&nbsp;</div>
+      </div>
+
+      <div class="progress mb-3" style="height:6px">
+        <div class="progress-bar" id="hold-bar" style="width:0%"></div>
+      </div>
+
+      <div class="d-flex gap-2">
+        <a href="{% url 'accounts:logout' %}" class="btn btn-light flex-grow-0">Sign out</a>
+        <button class="btn btn-light" id="btn-restart" type="button" disabled>
+          <i class="fa-solid fa-rotate-left me-1"></i>Start over</button>
+        <button class="btn btn-primary flex-grow-1" id="btn-save" type="button" disabled>
+          Save and continue</button>
+      </div>
+
+      {% comment %}
+        The server's refusal is the most useful sentence on this page — it is
+        the one that says what to change. A hairline of red text was not enough
+        for "that is turned too far, come back toward the camera".
+      {% endcomment %}
+      <div class="alert alert-warning d-none mt-3 mb-0" id="err" role="alert">
+        <div class="d-flex gap-2">
+          <i class="fa-solid fa-triangle-exclamation mt-1"></i>
+          <div><div class="fw-600" id="err-text"></div>
+            <div class="fs-13 mt-1" id="err-step"></div></div>
+        </div>
+      </div>
+
+      <div class="form-text mt-3">
+        Your photos are stored by your institute and used only to confirm it is
+        you marking attendance. If you need them captured again, ask your
+        department — you cannot redo this yourself.
+      </div>
+
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<style>
+  .ga-face-stage{position:relative;width:100%;aspect-ratio:4/3;border-radius:16px;
+    overflow:hidden;background:#0f172a}
+  .ga-face-stage video{width:100%;height:100%;object-fit:cover;transform:scaleX(-1)}
+  .ga-face-ring{position:absolute;inset:8% 22%;border:3px dashed rgba(255,255,255,.45);
+    border-radius:50%;transition:border-color .2s}
+  .ga-face-ring.ok{border-color:#22c55e;border-style:solid}
+  .ga-face-guide{position:absolute;right:10px;bottom:10px;color:#e2e8f0;
+    background:rgba(15,23,42,.6);border-radius:14px;padding:8px 8px 2px;
+    backdrop-filter:blur(2px)}
+
+  /* --- the 3D guide head -------------------------------------------------
+     perspective on the wrapper is what makes the rotation read as depth
+     rather than as a flat card turning; without it every layer would shear
+     identically and the illusion collapses. */
+  .ga-head3d{width:96px;height:104px;perspective:260px}
+  .ga-head-scene{position:relative;width:100%;height:100%;
+    transform-style:preserve-3d;will-change:transform}
+  .ga-head-scene > *{position:absolute;background:currentColor}
+
+  .h-face{left:18px;top:6px;width:60px;height:78px;border-radius:50% 50% 46% 46%;
+    opacity:.22;box-shadow:inset 0 0 0 2px currentColor;transform:translateZ(0)}
+  /* Ears sit behind the face plane, so they slide out of view on the near
+     side and into view on the far side as the head turns — the cue that
+     reads most clearly as "this is a rotation". */
+  .h-ear{top:36px;width:9px;height:18px;border-radius:50%;opacity:.7}
+  .h-ear.left{left:14px;transform:translateZ(-16px)}
+  .h-ear.right{right:14px;transform:translateZ(-16px)}
+
+  .h-brow{top:32px;width:16px;height:3px;border-radius:2px;opacity:.75}
+  .h-brow.left{left:26px;transform:translateZ(9px)}
+  .h-brow.right{right:26px;transform:translateZ(9px)}
+
+  .h-eye{top:40px;width:9px;height:9px;border-radius:50%}
+  .h-eye.left{left:29px;transform:translateZ(10px)}
+  .h-eye.right{right:29px;transform:translateZ(10px)}
+
+  /* Furthest forward, so it swings the widest arc — the strongest signal of
+     which way the head has turned. */
+  .h-nose{left:44px;top:48px;width:8px;height:14px;border-radius:40% 40% 50% 50%;
+    transform:translateZ(22px);opacity:.9}
+  .h-mouth{left:36px;top:68px;width:24px;height:4px;border-radius:3px;
+    transform:translateZ(12px);opacity:.85}
+
+  .ga-head-arrow{display:block;width:96px;height:22px;color:#e2e8f0}
+  .ga-face-shot{position:absolute;inset:0;background:#fff;opacity:0;
+    pointer-events:none;animation:ga-flash .35s ease-out}
+  @keyframes ga-flash{0%{opacity:.85}100%{opacity:0}}
+</style>
+<script type="module">
+import { FaceLandmarker, FilesetResolver }
+  from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
+
+/*
+ * Everything here is guidance, not security.
+ *
+ * The server re-detects each frame, re-measures the head angle and re-checks
+ * for a covered face, and its answer is the only one that counts. This exists
+ * so a student is told "turn a little further" while they can still act on it,
+ * instead of uploading three photos and being refused at the end.
+ */
+/*
+ * Windows on the eye-centre scale above. Every one of these sits comfortably
+ * inside what the server will accept (front ±14, turns 12–55), so a capture
+ * this page is happy with is never refused on arrival. The page is the strict
+ * one by design — it can talk to the student while they can still adjust.
+ */
+const POSES = [
+  { key:"FRONT", label:"Look straight at the camera", yaw:[-10, 10],  arrow:null },
+  { key:"LEFT",  label:"Turn your head slowly to your left", yaw:[18, 45], arrow:"left" },
+  { key:"RIGHT", label:"Turn your head slowly to your right", yaw:[-45, -18], arrow:"right" }
+];
+const HOLD_MS = 700;          // hold the pose this long before we capture
+
+const video = document.getElementById("cam");
+const ring = document.getElementById("ring");
+const stage = document.querySelector(".ga-face-stage");
+const instruction = document.getElementById("instruction");
+const hint = document.getElementById("hint");
+const holdBar = document.getElementById("hold-bar");
+const err = document.getElementById("err");
+
+let landmarker = null, step = 0, holdStart = 0, running = false;
+const shots = {};
+
+function setHint(text){ hint.textContent = text || " "; }
+
+function showError(message, pose){
+  document.getElementById("err-text").textContent = message;
+  document.getElementById("err-step").textContent = pose
+    ? "Retaking just this one: " + pose.label.toLowerCase() + "."
+    : "Let's take all three again.";
+  err.classList.remove("d-none");
+  err.scrollIntoView({block:"nearest", behavior:"smooth"});
+}
+
+function hideError(){ err.classList.add("d-none"); }
+
+/** Move to the first angle still missing, or offer to save when none are. */
+function advance(){
+  const next = POSES.findIndex(p => !shots[p.key]);
+  if(next === -1){
+    running = false;
+    step = POSES.length;
+    setHint("Looks good. Save to finish.");
+    document.getElementById("btn-save").disabled = false;
+    ring.classList.remove("ok");
+  } else {
+    step = next;
+  }
+  markStep();
+}
+
+function markStep(){
+  document.querySelectorAll("#steps [data-step]").forEach(function(el){
+    const i = POSES.findIndex(p => p.key === el.dataset.step);
+    el.className = "ga-pill " + (shots[el.dataset.step] ? "pill-green"
+                                 : i === step ? "pill-amber" : "pill-grey");
+  });
+  const pose = POSES[step];
+  instruction.textContent = pose ? pose.label : "All three captured";
+  drawGuide(pose && pose.arrow);
+}
+
+/*
+ * The animated head.
+ *
+ * It rotates about the vertical axis — a real yaw, the movement we are asking
+ * for. The earlier version used an SVG rotate(), which spins in the plane of
+ * the screen: that is a roll, and it was telling students to tilt their head
+ * onto their shoulder.
+ *
+ * Direction, carefully. The preview is mirrored, so it behaves like a mirror
+ * and the student's reflection appears to turn the way they turn. For "turn to
+ * your left" the face must therefore swing toward the LEFT of the screen. In
+ * CSS a point at +Z moves to +X under rotateY(+θ), so the nose swings right —
+ * meaning left needs a negative angle. Hence the sign below.
+ */
+const GUIDE_MAX_DEG = 30;
+
+function drawGuide(direction){
+  const scene = document.getElementById("head-scene");
+  const arrow = document.getElementById("guide-arrow");
+  cancelAnimationFrame(drawGuide._raf);
+
+  if(!direction){
+    // The "look straight ahead" step: hold the head square and drop the arrow,
+    // rather than animating nothing and leaving a stale pose on screen.
+    scene.style.transform = "rotateY(0deg)";
+    arrow.setAttribute("d", "");
+    return;
+  }
+
+  const sign = direction === "left" ? -1 : 1;
+  arrow.setAttribute("d", sign < 0
+    ? "M78 13 Q54 3 30 13 M39 6 L30 13 L39 20"      // sweeping left
+    : "M42 13 Q66 3 90 13 M81 6 L90 13 L81 20");    // sweeping right
+
+  const started = performance.now();
+  (function step(now){
+    // Ease out and hold briefly at the extreme, then return — a plain sine
+    // sweeps back so fast that the pose being asked for is never legible.
+    const t = ((now - started) % 2600) / 2600;
+    const eased = t < 0.45 ? Math.sin(t / 0.45 * Math.PI / 2)
+                : t < 0.65 ? 1
+                : Math.cos((t - 0.65) / 0.35 * Math.PI / 2);
+    scene.style.transform = "rotateY(" + (sign * GUIDE_MAX_DEG * eased).toFixed(1) + "deg)";
+    drawGuide._raf = requestAnimationFrame(step);
+  })(started);
+}
+
+/**
+ * Head turn in degrees. Positive means the subject turned to their OWN left.
+ *
+ * Derived from plain geometry rather than from the transformation matrix that
+ * used to be here: that read the wrong element for this axis and came out
+ * inverted, so "turn left" only ever fired when a student turned right.
+ *
+ * The reasoning here can be checked by eye. MediaPipe sees the raw camera
+ * frame — the mirroring is a CSS transform and never touches the pixels — and
+ * in that frame the subject's left is the larger-x side. So when they turn to
+ * their own left the nose drifts toward larger x, past the midpoint of the two
+ * eye corners. Nose right of centre therefore means "turned to their left".
+ *
+ * min/max rather than fixed indices for the eyes: the sign then depends only
+ * on where the nose sits, not on which landmark index is whose eye — one less
+ * convention to get backwards.
+ *
+ * The eye positions are the *centres* of each eye, taken as the midpoint of
+ * its inner and outer corners. That matters more than it looks: the server
+ * measures from the detector's eye keypoints, which are centres, and the
+ * outer corners sit roughly 1.6x further apart. Dividing by the wrong span
+ * scales every angle, so a turn the page was happy with arrived at the server
+ * reading half again as large and was refused as "too far". Same definition on
+ * both sides, or the two numbers are not comparable at all.
+ */
+const LM_EYE_A = [33, 133];     // one eye: outer corner, inner corner
+const LM_EYE_B = [263, 362];    // the other
+const LM_NOSE = 1;
+
+function yawFrom(result){
+  const lm = result.faceLandmarks && result.faceLandmarks[0];
+  if(!lm) return null;
+  const ax = (lm[LM_EYE_A[0]].x + lm[LM_EYE_A[1]].x) / 2;
+  const bx = (lm[LM_EYE_B[0]].x + lm[LM_EYE_B[1]].x) / 2;
+  const span = Math.abs(bx - ax);
+  if(span < 1e-6) return null;
+  const mid = (ax + bx) / 2;
+  return Math.max(-1, Math.min(1, (lm[LM_NOSE].x - mid) / (span / 2))) * 45;
+}
+
+function capture(){
+  const canvas = document.createElement("canvas");
+  canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+  // Drawn exactly as the camera sees it. The preview looks mirrored, but that
+  // is a CSS transform on the <video> element and the pixel data behind it was
+  // never flipped — so flipping here does not "un-mirror" anything, it
+  // introduces a mirror. Which is what it used to do: the server then measured
+  // a left turn on a right-turned face and refused every LEFT capture.
+  //
+  // It also has to match what MediaPipe measured, since that runs on the same
+  // unflipped frames.
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(video, 0, 0);
+  const flash = document.createElement("div");
+  flash.className = "ga-face-shot"; stage.appendChild(flash);
+  setTimeout(()=> flash.remove(), 400);
+  return new Promise(res => canvas.toBlob(res, "image/jpeg", 0.92));
+}
+
+async function tick(){
+  if(!running) return;
+  const pose = POSES[step];
+  if(pose && video.readyState >= 2){
+    const result = landmarker.detectForVideo(video, performance.now());
+    const faces = (result.faceLandmarks || []).length;
+    let ok = false;
+
+    if(faces === 0){ setHint("No face detected — move into the light."); }
+    else if(faces > 1){ setHint("More than one face in shot."); }
+    else {
+      const yaw = yawFrom(result);
+      if(yaw === null){ setHint("Hold still for a moment."); }
+      else if(pose.key === "FRONT"){
+        // Positive yaw means they are turned to their left, so the correction
+        // is to come back toward their right — and vice versa.
+        if(yaw > pose.yaw[1]) setHint("Turn slightly to your right.");
+        else if(yaw < pose.yaw[0]) setHint("Turn slightly to your left.");
+        else { ok = true; setHint("Hold it…"); }
+      } else {
+        // Measure how far they have turned *in the direction asked for*, so
+        // "further" and "too far" mean the same thing for both sides. Reading
+        // the raw yaw against the range had these backwards for RIGHT.
+        const towards = pose.key === "RIGHT" ? -yaw : yaw;
+        const need = Math.min(Math.abs(pose.yaw[0]), Math.abs(pose.yaw[1]));
+        const limit = Math.max(Math.abs(pose.yaw[0]), Math.abs(pose.yaw[1]));
+        if(towards < need) setHint(towards < 0 ? "Other way — " + pose.label.toLowerCase() + "."
+                                              : "A little further.");
+        else if(towards > limit) setHint("That's too far — come back a little.");
+        else { ok = true; setHint("Hold it…"); }
+      }
+    }
+
+    ring.classList.toggle("ok", ok);
+    if(ok){
+      if(!holdStart) holdStart = performance.now();
+      const held = performance.now() - holdStart;
+      holdBar.style.width = Math.min(100, held / HOLD_MS * 100) + "%";
+      if(held >= HOLD_MS){
+        holdStart = 0; holdBar.style.width = "0%";
+        shots[pose.key] = await capture();
+        // Not step+1: after retaking a single angle the missing one may be
+        // anywhere in the sequence, and the others are already in hand.
+        advance();
+      }
+    } else {
+      holdStart = 0; holdBar.style.width = "0%";
+    }
+  }
+  requestAnimationFrame(tick);
+}
+
+async function start(){
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: "user", width: { ideal: 960 } }, audio: false });
+    video.srcObject = stream;
+  } catch (e) {
+    instruction.textContent = "We could not use your camera";
+    setHint("Allow camera access in your browser, then reload this page.");
+    return;
+  }
+  const files = await FilesetResolver.forVisionTasks(
+    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
+  landmarker = await FaceLandmarker.createFromOptions(files, {
+    baseOptions: {
+      modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task"
+    },
+    // No transformation matrices: the pose comes from landmark geometry now,
+    // which is one convention instead of two that can disagree.
+    runningMode: "VIDEO", numFaces: 2
+  });
+  document.getElementById("btn-restart").disabled = false;
+  running = true; markStep(); tick();
+}
+
+/**
+ * Start again, from scratch or from one step.
+ *
+ * `keepMessage` matters. The failure path used to set the error text and then
+ * call this, which cleared it in the same tick — so the server's explanation
+ * was written and erased before the browser could paint it, and every refusal
+ * looked to the student like nothing had happened at all.
+ */
+function restart(fromPose, keepMessage){
+  if(fromPose){
+    // Only the frame the server objected to. Making someone redo all three
+    // for one bad angle is a punishment for the server's opinion.
+    delete shots[fromPose];
+  } else {
+    POSES.forEach(p => delete shots[p.key]);
+  }
+  if(!keepMessage) hideError();
+  holdStart = 0; running = true;
+  document.getElementById("btn-save").disabled = true;
+  advance(); tick();
+}
+
+document.getElementById("btn-restart").addEventListener("click", function(){
+  restart(null, false);
+});
+
+document.getElementById("btn-save").addEventListener("click", function(){
+  const $btn = $(this);
+  hideError();
+  const body = new FormData();
+  POSES.forEach(p => body.append(p.key.toLowerCase(), shots[p.key], p.key.toLowerCase() + ".jpg"));
+  GA.btnBusy($btn, true, "Checking…");
+  GA.post("{% url 'accounts:api_face_enrol' %}", body, {quiet:true})
+    .done(function(res){
+      GA.toast(res.message, "ok");
+      window.location = (res.data && res.data.redirect) || "/app/";
+    })
+    .fail(function(xhr){
+      const r = (xhr && xhr.responseJSON) || {};
+      const failed = POSES.find(p => p.key === r.pose);
+      showError(r.message || "Could not save those photos. Please try again.", failed);
+      // One angle is enough when the server named it. Only a refusal it cannot
+      // attribute — "these are not the same person" — is worth starting over.
+      restart(failed ? failed.key : null, true);
+    })
+    .always(()=> GA.btnBusy($btn, false));
+});
+
+start();
+</script>
+{% endblock %}

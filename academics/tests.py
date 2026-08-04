@@ -28,6 +28,10 @@ class ImporterTests(TestCase):
         self.dept.save()
         for code, name in [("DSA", "Data Structures"), ("DBMS", "Databases"), ("AI", "Artificial Intelligence")]:
             Subject.objects.create(department=self.dept, code=code, name=name)
+        # Batches are no longer conjured out of the spreadsheet, so the ones a
+        # roster refers to have to exist first — as they would in real use.
+        self.batch = Batch.objects.create(department=self.dept, label="2022-26",
+                                          start_year=2022, end_year=2026)
 
     def test_import_creates_students_batches_and_enrollments(self):
         upload = make_csv([
@@ -40,12 +44,91 @@ class ImporterTests(TestCase):
         self.assertEqual(job.created_count, 2)
         self.assertEqual(job.error_count, 0)
         self.assertTrue(Batch.objects.filter(department=self.dept, label="2022-26").exists())
+        self.assertEqual(Batch.objects.filter(department=self.dept).count(), 1)
         ananya = StudentProfile.objects.get(user__email="ananya@i.edu")
         self.assertEqual(ananya.enrollments.count(), 3)
         self.assertEqual(StudentProfile.objects.get(user__email="rahul@i.edu").enrollments.count(), 2)
         self.assertFalse(ananya.user.registration_completed)   # awaits invite acceptance
         self.assertEqual(ananya.guardian_mobile, "+919812345670")
         self.assertEqual(ananya.guardian_name, "Mr. Sharma")
+
+    def test_a_batch_that_does_not_exist_is_an_error_not_a_new_batch(self):
+        """
+        Regression: unknown batches used to be created silently, so a typo
+        (2022-27 for 2022-26) produced a second cohort and split a class in
+        two — invisible until the attendance figures stopped adding up.
+        """
+        upload = make_csv([
+            "Typo Student,1,typo@i.edu,2022-27,\"DSA\",+919812345670,G,X9",
+        ])
+        rows, err = read_rows(upload)
+        job = import_students(rows, self.dept, self.hod, send_invites=False)
+        self.assertEqual(job.error_count, 1)
+        self.assertEqual(job.created_count, 0)
+        self.assertIn("does not exist", job.report["rows"][0]["messages"][0])
+        self.assertEqual(Batch.objects.filter(department=self.dept).count(), 1)
+        self.assertFalse(StudentProfile.objects.filter(user__email="typo@i.edu").exists())
+
+    def test_it_still_creates_batches_when_explicitly_asked(self):
+        """The old behaviour is available, just no longer the default."""
+        upload = make_csv([
+            "New Cohort,1,cohort@i.edu,2023-27,\"DSA\",+919812345670,G,X8",
+        ])
+        rows, err = read_rows(upload)
+        job = import_students(rows, self.dept, self.hod, send_invites=False,
+                              create_missing_batches=True)
+        self.assertEqual(job.error_count, 0)
+        self.assertTrue(Batch.objects.filter(label="2023-27").exists())
+
+    def test_only_new_students_are_emailed_an_invitation(self):
+        """
+        A sheet of email + guardian mobile is a routine bulk edit. It used to
+        re-send an activation link to every student who had not yet activated,
+        every time it was uploaded.
+        """
+        from unittest.mock import patch
+
+        rows, _ = read_rows(make_csv([
+            "Ananya Sharma,1,ananya@i.edu,2022-26,\"DSA\",+919812345670,G,C1",
+        ]))
+        with patch("academics.importer.send_invitation") as sent:
+            import_students(rows, self.dept, self.hod, send_invites=True)
+        self.assertEqual(sent.call_count, 1)          # new account
+
+        rows, _ = read_rows(make_csv([
+            "Ananya Sharma,1,ananya@i.edu,2022-26,\"DSA\",+919899999999,G,C1",
+        ]))
+        with patch("academics.importer.send_invitation") as sent:
+            job = import_students(rows, self.dept, self.hod, send_invites=True)
+        self.assertEqual(sent.call_count, 0)          # same person, updated
+        self.assertEqual(job.updated_count, 1)
+        self.assertFalse(job.report["rows"][0]["invited"])
+
+    def test_a_changed_email_counts_as_a_new_student_and_is_invited(self):
+        from unittest.mock import patch
+
+        rows, _ = read_rows(make_csv([
+            "Ananya Sharma,1,old@i.edu,2022-26,\"DSA\",+919812345670,G,C1",
+        ]))
+        import_students(rows, self.dept, self.hod, send_invites=False)
+
+        rows, _ = read_rows(make_csv([
+            "Ananya Sharma,1,new@i.edu,2022-26,\"DSA\",+919812345670,G,C1",
+        ]))
+        with patch("academics.importer.send_invitation") as sent:
+            job = import_students(rows, self.dept, self.hod, send_invites=True)
+        self.assertEqual(sent.call_count, 1)
+        self.assertTrue(job.report["rows"][0]["invited"])
+
+    def test_a_preview_never_emails_anyone(self):
+        from unittest.mock import patch
+
+        rows, _ = read_rows(make_csv([
+            "Ananya Sharma,1,ananya@i.edu,2022-26,\"DSA\",+919812345670,G,C1",
+        ]))
+        with patch("academics.importer.send_invitation") as sent:
+            import_students(rows, self.dept, self.hod, send_invites=False)
+        self.assertEqual(sent.call_count, 0)
 
     def test_unknown_subject_and_bad_batch_are_reported(self):
         upload = make_csv([

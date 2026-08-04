@@ -27,6 +27,10 @@ urlpatterns = [
     # student
     path("mark/<str:token>/", views.mark_page, name="mark"),
     path("api/mark/<str:token>/", views.api_mark, name="api_mark"),
+    # Runs the gates and hands back a ticket for the face-matching socket.
+    path("api/mark/<str:token>/start/", views.api_mark_start, name="api_mark_start"),
+    path("api/manual-requests/<oid:pk>/decide/", views.api_manual_request_decide,
+         name="api_manual_request_decide"),
     path("me/", views.my_attendance_page, name="my_attendance"),
 
     # absence reasons

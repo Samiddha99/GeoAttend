@@ -445,3 +445,112 @@ class AbsenceAttachment(models.Model):
         """A size a person can read, rather than a count of bytes."""
         kb = self.size_bytes / 1024
         return f"{kb:.0f} KB" if kb < 1024 else f"{kb / 1024:.1f} MB"
+
+
+class FaceVerifyTicket(models.Model):
+    """
+    Permission to attempt face verification for one class, once.
+
+    The geo-fence, the device lock, the enrolment and the window are all checked
+    over HTTP before this exists. The socket then only has to ask "is this a
+    valid, unspent ticket" — it never re-runs those rules, and more importantly
+    a student cannot reach the matching socket without having passed them.
+
+    The measured numbers are carried here rather than re-read from the browser
+    later: a client that could restate its own distance after the check would
+    make the geo-fence decorative.
+    """
+
+    session = models.ForeignKey(
+        AttendanceSession, on_delete=models.CASCADE, related_name="face_tickets"
+    )
+    student = models.ForeignKey(
+        StudentProfile, on_delete=models.CASCADE, related_name="face_tickets"
+    )
+    token = models.CharField(max_length=32, unique=True, default=new_token, db_index=True)
+
+    # Exactly what check_mark_allowed measured, frozen at issue time.
+    latitude = models.DecimalField(max_digits=9, decimal_places=6)
+    longitude = models.DecimalField(max_digits=9, decimal_places=6)
+    accuracy_m = models.FloatField(null=True, blank=True)
+    distance_m = models.FloatField(default=0)
+    device_fingerprint = models.CharField(max_length=64, blank=True)
+    ip = models.GenericIPAddressField(null=True, blank=True)
+    user_agent = models.CharField(max_length=400, blank=True)
+
+    attempts = models.PositiveIntegerField(default=0)
+    used_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(default=timezone.now)
+    expires_at = models.DateTimeField(db_index=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [models.Index(fields=["session", "student"])]
+
+    def __str__(self):
+        return f"{self.student} · {self.session.subject.code} · face ticket"
+
+    @property
+    def is_spent(self):
+        return self.used_at is not None
+
+    @property
+    def is_expired(self):
+        return timezone.now() >= self.expires_at
+
+    @property
+    def is_usable(self):
+        return not self.is_spent and not self.is_expired
+
+
+class ManualMarkRequest(models.Model):
+    """
+    A student the camera could not recognise, asking the teacher to look up.
+
+    Only reachable once the geo-fence has passed, so the student is provably in
+    the room — the question is identity, not presence, and the teacher standing
+    in front of them is better placed to answer it than any model. The best
+    frame is kept so the request is not just a name with no evidence.
+    """
+
+    class Status(models.TextChoices):
+        PENDING = "PENDING", "Waiting for the teacher"
+        APPROVED = "APPROVED", "Marked present"
+        REJECTED = "REJECTED", "Refused"
+
+    session = models.ForeignKey(
+        AttendanceSession, on_delete=models.CASCADE, related_name="manual_requests"
+    )
+    student = models.ForeignKey(
+        StudentProfile, on_delete=models.CASCADE, related_name="manual_mark_requests"
+    )
+    ticket = models.ForeignKey(
+        FaceVerifyTicket, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="manual_requests",
+    )
+    # Why the match never landed: no face, too dark, never close enough.
+    reason = models.CharField(max_length=120, blank=True)
+    best_score = models.FloatField(default=0)
+    attempts = models.PositiveIntegerField(default=0)
+    snapshot = models.ImageField(upload_to="manual_marks/", max_length=300,
+                                 null=True, blank=True)
+
+    status = models.CharField(max_length=10, choices=Status.choices,
+                              default=Status.PENDING)
+    decided_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="manual_marks_decided",
+    )
+    decided_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(default=timezone.now, db_index=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(fields=["session", "student"],
+                                    name="uniq_manual_request_per_session"),
+        ]
+        indexes = [models.Index(fields=["session", "status"])]
+
+    def __str__(self):
+        return f"{self.student} · {self.session.subject.code} · {self.status}"

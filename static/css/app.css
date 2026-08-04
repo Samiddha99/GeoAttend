@@ -403,3 +403,11 @@ tr:hover .ga-dial.wa:hover{ background:#25d366; }
 }
 /* On the active row the red would fight the indigo highlight. */
 .ga-nav a.active .ga-nav-badge{ background:#fff; color:var(--ga-primary); box-shadow:none; }
+
+/* ---- live face verification on the mark page --------------------------- */
+.ga-live-stage{position:relative;width:100%;max-width:280px;margin:0 auto;
+  aspect-ratio:1/1;border-radius:50%;overflow:hidden;background:#0f172a}
+.ga-live-stage video{width:100%;height:100%;object-fit:cover;transform:scaleX(-1)}
+.ga-live-ring{position:absolute;inset:0;border:4px solid rgba(255,255,255,.35);
+  border-radius:50%;transition:border-color .15s}
+.ga-live-ring.ok{border-color:#22c55e}

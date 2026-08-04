@@ -1,6 +1,6 @@
 {% extends "layouts/app.html" %}
 {% block page_title %}{{ page_heading|default:"Students" }}{% endblock %}
-{% block page_sub %}{% if can_import %}Import the roster from Excel — every student is emailed an activation link.{% elif wide %}Every student in the institute. You can unlink a lost device; editing stays with the HoD.{% else %}Students in the classes you teach.{% endif %}{% endblock %}
+{% block page_sub %}{% if can_import %}Import the roster from Excel — new students are emailed an activation link; existing ones are updated in place.{% elif wide %}Every student in the institute. You can unlink a lost device; editing stays with the HoD.{% else %}Students in the classes you teach.{% endif %}{% endblock %}
 {% block topbar_actions %}
 <a href="{% url 'academics:api_students_export' %}" class="btn btn-light btn-sm" id="btn-export">
   <i class="fa-solid fa-file-export me-1"></i>Export roster</a>
@@ -64,7 +64,10 @@
             A <b>blank cell leaves the current value alone</b>; put a single <code>-</code> to clear it.
             Leaving <code>subjects enrolled</code> blank keeps their existing enrolments.
           </div>
-          <div class="mt-1">Add your subjects <b>before</b> importing — unknown subject codes are reported as errors.
+          <div class="mt-1">Add your <b>subjects and batches</b> before importing — unknown
+          subject codes and unknown batches are both reported as errors rather than created,
+          so a typo cannot quietly split a class in two.
+          Only <b>new</b> students are emailed an activation link; updating an existing one sends nothing.
           <a href="{% url 'academics:api_students_template' %}">Download the template</a>.</div>
         </div>
       </div>
@@ -94,7 +97,7 @@
     <div class="modal-footer">
       <button type="button" class="btn btn-light" data-bs-dismiss="modal">Close</button>
       <button type="button" class="btn btn-primary" id="btn-import" disabled>
-        <i class="fa-solid fa-cloud-arrow-up me-1"></i>Import &amp; send invitations</button>
+        <i class="fa-solid fa-cloud-arrow-up me-1"></i>Import &amp; invite new students</button>
     </div>
   </div>
 </div></div>
@@ -108,6 +111,40 @@
   </div>
 </div></div>
 {% endif %}
+
+<!-- face enrolment modal -->
+<div class="modal fade" id="face-modal" tabindex="-1"><div class="modal-dialog modal-lg modal-dialog-centered">
+  <div class="modal-content">
+    <div class="modal-header">
+      <h5 class="modal-title"><i class="fa-solid fa-face-smile me-2 text-primary"></i>Face on file</h5>
+      <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+    <div class="modal-body">
+      <div class="mb-2">
+        <div class="fw-600" id="face-student"></div>
+        <div class="text-muted-2 fs-13" id="face-meta"></div>
+      </div>
+      <div class="row g-3" id="face-shots"></div>
+      <!--
+        Worth looking at rather than trusting the flag: a green pill only says
+        three images passed the checks, not that they are of the right student.
+        Comparing them against the name is the only thing that catches an
+        enrolment taken of a friend.
+      -->
+      <div class="alert alert-light border fs-13 mt-3 mb-0 d-flex gap-2">
+        <i class="fa-solid fa-circle-info text-primary mt-1"></i>
+        <div>These were checked automatically for a clear, uncovered face at the
+          right angle — but only a person can say whether they are the right
+          student. If they are not, clear the enrolment and have them capture it
+          again in front of you.</div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button type="button" class="btn btn-light" data-bs-dismiss="modal">Close</button>
+      <button type="button" class="btn btn-outline-danger" id="face-clear">
+        <i class="fa-solid fa-rotate-left me-1"></i>Clear and re-capture</button>
+    </div>
+  </div>
+</div></div>
 
 <!-- unlink device modal -->
 <div class="modal fade" id="unlink-modal" tabindex="-1"><div class="modal-dialog modal-dialog-centered">
@@ -209,6 +246,11 @@ $(function(){
         ? '<span class="ga-pill pill-blue" title="Bound '+GA.esc(r.device_bound_at)+
           '"><i class="fa-solid fa-mobile-screen"></i>Linked</span>'
         : '<span class="ga-pill pill-grey"><i class="fa-solid fa-mobile-screen-button"></i>None</span>' },
+    { key:"face_enrolled", label:"Face", render:(v,r)=> v
+        ? '<span class="ga-pill pill-green face-open" style="cursor:pointer" data-id="'+r.id+
+          '" data-name="'+GA.esc(r.name)+'" title="Click to see the photos on file">'+
+          '<i class="fa-solid fa-face-smile"></i>On file</span>'
+        : '<span class="ga-pill pill-amber" title="This student cannot use their account until they capture it"><i class="fa-solid fa-camera"></i>Not yet</span>' },
     { key:"id", label:"", sortable:false, className:"text-end", render:(v,r)=>
       '<div class="btn-group btn-group-sm">'+
       (canEdit ? '<button class="btn btn-light edit" data-id="'+v+'" title="Edit"><i class="fa-solid fa-pen"></i></button>' : '')+
@@ -216,6 +258,11 @@ $(function(){
         ? '<button class="btn btn-light unlink" data-id="'+v+'" data-name="'+GA.esc(r.name)+
           '" data-at="'+GA.esc(r.device_bound_at)+'" title="Unlink device — lost or changed phone">'+
           '<i class="fa-solid fa-link-slash text-primary"></i></button>'
+        : '')+
+      (r.face_enrolled
+        ? '<button class="btn btn-light reset-face" data-id="'+v+'" data-name="'+GA.esc(r.name)+
+          '" title="Clear face — lets the student capture it again">'+
+          '<i class="fa-solid fa-face-smile text-primary"></i></button>'
         : '')+
       (canEdit && r.status==="invited" ? '<button class="btn btn-light resend" data-id="'+v+'" title="Resend invite"><i class="fa-solid fa-paper-plane"></i></button>' : '')+
       (canEdit ? '<button class="btn btn-light '+(r.is_active?'text-danger':'text-success')+' toggle" data-id="'+v+'" title="'+(r.is_active?'Deactivate':'Activate')+'"><i class="fa-solid fa-'+(r.is_active?'user-slash':'user-check')+'"></i></button>' : '')+
@@ -271,6 +318,42 @@ $(function(){
       $("#unlink-go").attr("data-id", id);
       new bootstrap.Modal("#unlink-modal").show();
     });
+    $("#tbl").off("click", ".face-open").on("click", ".face-open", function(){
+      const id = $(this).attr("data-id"), name = $(this).data("name");
+      $("#face-student").text(name);
+      $("#face-meta").text("Loading…");
+      $("#face-clear").attr("data-id", id).data("name", name);
+      GA.loading("#face-shots", {rows:1, cols:3});
+      new bootstrap.Modal("#face-modal").show();
+      GA.get("/manage/api/students/"+id+"/face/").done(function(res){
+        const d = res.data;
+        $("#face-meta").text(
+          (d.class_roll ? d.class_roll + " · " : "") +
+          (d.captured_at ? "captured " + d.captured_at : "no capture on file"));
+        $("#face-shots").html(d.rows.length
+          ? d.rows.map(function(x){
+              return '<div class="col-12 col-md-4"><div class="card h-100">'+
+                '<img src="'+x.url+'" class="card-img-top" alt="'+GA.esc(x.label)+'" '+
+                'style="aspect-ratio:3/4;object-fit:cover;background:#0f172a">'+
+                '<div class="card-body py-2">'+
+                '<div class="fw-600 fs-13">'+GA.esc(x.label)+'</div>'+
+                '<small class="text-muted-2">measured '+x.yaw+'&deg;</small>'+
+                '</div></div></div>';
+            }).join("")
+          : '<div class="col-12"><div class="ga-empty py-4"><i class="fa-solid fa-inbox"></i>'+
+            'Nothing on file for this student.</div></div>');
+      });
+    });
+    $("#tbl").off("click", ".reset-face").on("click", ".reset-face", function(){
+      const id = $(this).attr("data-id"), name = $(this).data("name");
+      GA.confirm({title:"Clear " + name + "'s face?", variant:"warning", icon:"fa-camera",
+        body:"They will be asked to capture it again the next time they sign in, and "+
+             "cannot use their account until they do. Use this if their appearance has "+
+             "changed, or if the capture is rejecting the right person."})
+        .done(function(){
+          GA.post("/manage/api/students/"+id+"/reset-face/").done(load);
+        });
+    });
     $("#tbl").off("click", ".resend").on("click", ".resend", function(){ GA.post("/manage/api/students/"+$(this).attr("data-id")+"/resend/"); });
     $("#tbl").off("click", ".toggle").on("click", ".toggle", function(){
       const id=$(this).attr("data-id");
@@ -324,6 +407,11 @@ $(function(){
       { key:"guardian_mobile", label:"Guardian", render:v=> v ? GA.esc(v) : '<span class="text-muted-2">—</span>' },
       { key:"subjects", label:"Subjects", sortable:false, render:v=>(v||[]).map(c=>'<span class="ga-chip">'+GA.esc(c)+'</span>').join("") },
       { key:"status", label:"Result", render:v=>GA.statusPill(v) },
+      // Visible before anything is sent. Only new accounts are invited; an
+      // existing student being updated is not emailed again.
+      { key:"invited", label:"Invite", className:"text-center", render:v=> v
+          ? '<i class="fa-solid fa-paper-plane text-primary" title="An invitation will be emailed"></i>'
+          : '<span class="text-muted-2" title="Already has an account — not emailed">—</span>' },
       { key:"messages", label:"Notes", sortable:false, render:v=>
         (v||[]).length ? '<small class="text-danger">'+GA.esc(v.join("; "))+'</small>' : '' }
     ]});
@@ -337,13 +425,36 @@ $(function(){
     const $btn = dry ? $("#btn-preview") : $("#btn-import");
     GA.btnBusy($btn, true, dry ? "Checking…" : "Importing…");
     GA.post("{% url 'academics:api_students_import' %}", fd)
+      // Registered before .done, deliberately. jQuery runs callbacks in the
+      // order they were added and does not isolate them, so a throw inside
+      // .done stops everything after it — including a .always added later.
+      // That is how this button used to strand on "Checking…" with no error
+      // anywhere: one bad field in the reply and the reset never ran.
+      .always(()=> GA.btnBusy($btn, false))
       .done(function(res){
+        const counts = (res.data && res.data.counts) || null;
+        if(!counts){
+          // A 200 that does not carry a report is a server-side problem, not
+          // something to render. Say so rather than failing on `counts.total`.
+          GA.toast("The server replied without an import report. Please try again.", "err");
+          return;
+        }
         renderImport(res);
-        GA.toast(res.message, res.data.counts.errors ? "warn":"ok");
+        GA.toast(res.message, counts.errors ? "warn" : "ok");
         $("#btn-import").prop("disabled", false);
-        if(!dry){ $("#btn-import").prop("disabled", true); load(); }
-      })
-      .always(()=> GA.btnBusy($btn,false));
+        if(!dry){
+          $("#btn-import").prop("disabled", true);
+          load();
+          // Closed only when nothing was rejected. With errors the report is
+          // the whole point of the screen, and closing over it would leave the
+          // person guessing which rows did not go in.
+          if(!counts.errors){
+            bootstrap.Modal.getInstance($("#import-modal")[0]).hide();
+            $("#import-form")[0].reset();
+            $("#import-result").addClass("d-none");
+          }
+        }
+      });
   }
   $("#btn-preview").on("click", ()=> sendImport(true));
   $("#btn-import").on("click", ()=> sendImport(false));
@@ -362,6 +473,19 @@ $(function(){
         { key:"status", label:"Status", render:v=>GA.statusPill(v==="SUCCESS"?"active":v==="PARTIAL"?"PENDING":"REVOKED") }
       ]});
     });
+  });
+
+  $("#face-clear").on("click", function(){
+    const id = $(this).attr("data-id"), name = $(this).data("name");
+    GA.confirm({title:"Clear " + name + "'s face?", variant:"warning", icon:"fa-camera",
+      body:"They will be asked to capture it again the next time they sign in, and "+
+           "cannot use their account until they do."})
+      .done(function(){
+        GA.post("/manage/api/students/"+id+"/reset-face/").done(function(){
+          bootstrap.Modal.getInstance($("#face-modal")[0]).hide();
+          load();
+        });
+      });
   });
 
   $("#unlink-go").on("click", function(){

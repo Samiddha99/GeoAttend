@@ -37,6 +37,25 @@
 
         <div id="state-box"></div>
 
+        <!--
+          The camera stage. Kept out of the way until the geo-fence has passed:
+          asking for a camera before we know the student is even in the room is
+          a permission prompt for nothing.
+        -->
+        <div id="face-stage" class="d-none">
+          <div class="ga-live-stage">
+            <video id="live-cam" autoplay playsinline muted></video>
+            <div class="ga-live-ring" id="live-ring"></div>
+          </div>
+          <div class="text-center mt-2">
+            <div class="fw-600" id="live-title">Looking for your face…</div>
+            <div class="text-muted-2 fs-13" id="live-hint">&nbsp;</div>
+          </div>
+          <div class="progress mt-2" style="height:5px">
+            <div class="progress-bar" id="live-bar" style="width:0%"></div>
+          </div>
+        </div>
+
         <div class="mt-3 d-grid gap-2" id="actions"></div>
 
         <hr>
@@ -97,6 +116,8 @@ $(function(){
   // would render `const MAX_ACCURACY = ;`, a syntax error that kills this whole
   // script block — and with it the student's ability to mark at all.
   const MAX_ACCURACY = {{ max_accuracy_m|default:100 }};
+  const FACE_LIVE = {{ face_live|yesno:"true,false" }};
+  const FALLBACK_AFTER = {{ face_fallback_after|default:45 }};
 
   function attempt(){
     $("#state-box").html('<div class="text-center py-3"><div class="ga-spinner mx-auto mb-3"></div>'+
@@ -120,16 +141,197 @@ $(function(){
               MAX_ACCURACY + " m or better…");
       }
     }).done(function(pos){
-      GA.post("{% url 'attendance:api_mark' token=token %}", {
+      // Two steps now. This one settles "are you in the room" over ordinary
+      // HTTP and comes back with a ticket; the socket then settles "are you
+      // you". Splitting them means the camera never opens for a student who
+      // was never inside the fence.
+      const url = FACE_LIVE
+        ? "{% url 'attendance:api_mark_start' token=token %}"
+        : "{% url 'attendance:api_mark' token=token %}";
+      GA.post(url, {
         latitude: pos.latitude, longitude: pos.longitude, accuracy: pos.accuracy,
         device_hash: GA.deviceHash()
       }, {quiet:true})
-        .done(function(res){ success(res.data); })
+        .done(function(res){
+          if(FACE_LIVE) startFaceCheck(res.data);
+          else success(res.data);
+        })
         .fail(function(xhr){
           const r = (xhr && xhr.responseJSON) || {};
           failure(r.message || "Something went wrong.", r.code);
         });
     }).fail(function(err){ failure(err.message, "NO_LOCATION"); });
+  }
+
+  /* ==================================================================
+     Live face verification
+     ------------------------------------------------------------------
+     One frame in flight at a time. The browser sends a cropped, scaled
+     frame; the server answers; only then is the next one sent. Firing
+     frames at a fixed rate would build a queue of stale pictures on a
+     server that can only look at one at a time — and the student would
+     wait longer, not less.
+
+     MediaPipe decides *when* a frame is worth sending. It never decides
+     whether it matched: the socket answers that, and the server marks
+     the attendance itself.
+     ================================================================== */
+  let socket = null, landmarker = null, streaming = false, inFlight = false;
+  let startedAt = 0, fallbackShown = false, ticket = null;
+
+  async function startFaceCheck(data){
+    ticket = data.ticket;
+    $("#state-box").html(
+      '<div class="alert alert-success py-2 mb-3 fs-13">'+
+      '<i class="fa-solid fa-location-dot me-2"></i>You are in the classroom'+
+      (data.distance_m != null ? " (" + data.distance_m + " m away)" : "") + '.</div>');
+    $("#actions").empty();
+    $("#face-stage").removeClass("d-none");
+    head("ga-gradient-2", "fa-camera", "Now let us check it is you",
+         "Look at the camera in good light.");
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "user", width: { ideal: 640 } }, audio: false });
+      document.getElementById("live-cam").srcObject = stream;
+    } catch (e) {
+      failure("We could not use your camera. Allow camera access and reload, "+
+              "or ask your teacher to mark you.", "NO_CAMERA");
+      return;
+    }
+
+    const vision = await import(
+      "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs");
+    const files = await vision.FilesetResolver.forVisionTasks(
+      "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
+    landmarker = await vision.FaceLandmarker.createFromOptions(files, {
+      baseOptions: { modelAssetPath:
+        "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task" },
+      runningMode: "VIDEO", numFaces: 2
+    });
+
+    openSocket(data.socket);
+  }
+
+  function openSocket(path){
+    const scheme = location.protocol === "https:" ? "wss://" : "ws://";
+    socket = new WebSocket(scheme + location.host + path);
+    socket.binaryType = "arraybuffer";
+
+    socket.onopen = function(){
+      socket.send(JSON.stringify({action:"start", ticket: ticket}));
+      startedAt = Date.now();
+      streaming = true;
+      pump();
+    };
+    socket.onmessage = function(ev){
+      const msg = JSON.parse(ev.data);
+      inFlight = false;                       // the server has answered
+      if(msg.state === "marked"){ streaming = false; success({
+          subject: "{{ session.subject.code }} — {{ session.subject.name }}",
+          batch: "{{ session.batch.label }}",
+          student: "{{ user.get_full_name }}",
+          marked_at: new Date().toLocaleString(),
+          distance_m: msg.distance
+        }); stopCamera(); return; }
+      if(msg.state === "error" || msg.state === "exhausted"){
+        streaming = false; stopCamera();
+        failure(msg.hint || "Verification could not be completed.", "FACE");
+        offerTeacher(true);
+        return;
+      }
+      if(msg.state === "asked_teacher"){
+        streaming = false; stopCamera();
+        head("ga-gradient-3", "fa-hand", "Asked your teacher", msg.hint || "");
+        $("#state-box").html('<div class="alert alert-info mb-0">'+GA.esc(msg.hint || "")+'</div>');
+        $("#actions").empty();
+        return;
+      }
+      $("#live-hint").text(msg.hint || "");
+      if(msg.best != null) $("#live-bar").css("width", Math.min(100, msg.best * 140) + "%");
+    };
+    socket.onclose = function(ev){
+      streaming = false;
+      if(ev.code === 4401) failure("Your session expired. Please sign in again.", "AUTH");
+    };
+  }
+
+  /** The gate: only send a frame that has a fair chance of matching. */
+  function usableFace(result){
+    const faces = result.faceLandmarks || [];
+    if(faces.length === 0) return {ok:false, hint:"No face detected — move into the light."};
+    if(faces.length > 1) return {ok:false, hint:"More than one face in shot."};
+    const lm = faces[0];
+    let minX = 1, maxX = 0, minY = 1, maxY = 0;
+    for(const p of lm){
+      if(p.x < minX) minX = p.x; if(p.x > maxX) maxX = p.x;
+      if(p.y < minY) minY = p.y; if(p.y > maxY) maxY = p.y;
+    }
+    if((maxY - minY) < 0.22) return {ok:false, hint:"Move a little closer.", box:[minX,minY,maxX,maxY]};
+    return {ok:true, box:[minX, minY, maxX, maxY]};
+  }
+
+  /** Crop to the face with margin and scale down — far less to send and to decode. */
+  function frameFrom(video, box){
+    const vw = video.videoWidth, vh = video.videoHeight;
+    const pad = 0.35;
+    const w = (box[2] - box[0]) * vw, h = (box[3] - box[1]) * vh;
+    const cx = (box[0] + box[2]) / 2 * vw, cy = (box[1] + box[3]) / 2 * vh;
+    const side = Math.min(Math.max(w, h) * (1 + pad * 2), Math.min(vw, vh));
+    const sx = Math.max(0, Math.min(vw - side, cx - side / 2));
+    const sy = Math.max(0, Math.min(vh - side, cy - side / 2));
+
+    const out = 320;
+    const canvas = document.createElement("canvas");
+    canvas.width = out; canvas.height = out;
+    canvas.getContext("2d").drawImage(video, sx, sy, side, side, 0, 0, out, out);
+    return new Promise(res => canvas.toBlob(res, "image/jpeg", 0.75));
+  }
+
+  async function pump(){
+    if(!streaming) return;
+    const video = document.getElementById("live-cam");
+    if(!inFlight && video.readyState >= 2 && socket && socket.readyState === 1){
+      const check = usableFace(landmarker.detectForVideo(video, performance.now()));
+      $("#live-ring").toggleClass("ok", check.ok);
+      if(check.ok){
+        inFlight = true;                      // nothing else goes out until answered
+        const blob = await frameFrom(video, check.box);
+        if(blob && socket.readyState === 1) socket.send(await blob.arrayBuffer());
+        else inFlight = false;
+      } else if(check.hint){
+        $("#live-hint").text(check.hint);
+      }
+    }
+    if(!fallbackShown && startedAt && Date.now() - startedAt > FALLBACK_AFTER * 1000){
+      fallbackShown = true;
+      offerTeacher(false);
+    }
+    requestAnimationFrame(pump);
+  }
+
+  function offerTeacher(replace){
+    // The geo-fence already passed, so the student is in the room. The only
+    // open question is who they are, and the teacher can see them.
+    if($("#btn-ask-teacher").length) return;
+    $("#actions").append(
+      '<button class="btn btn-light" id="btn-ask-teacher">'+
+      '<i class="fa-solid fa-hand me-1"></i>Ask my teacher to mark me</button>');
+    $("#btn-ask-teacher").on("click", function(){
+      GA.btnBusy($(this), true, "Asking…");
+      if(socket && socket.readyState === 1){
+        socket.send(JSON.stringify({action:"give_up", reason:"Face not recognised"}));
+      } else {
+        failure("Connection lost. Please reload and try again.", "SOCKET");
+      }
+    });
+  }
+
+  function stopCamera(){
+    const video = document.getElementById("live-cam");
+    const stream = video && video.srcObject;
+    if(stream) stream.getTracks().forEach(t => t.stop());
+    $("#face-stage").addClass("d-none");
   }
 
   if (already) {

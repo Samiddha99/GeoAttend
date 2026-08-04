@@ -6,7 +6,7 @@
 app = 'geoattend'
 primary_region = 'sin'
 kill_signal = 'SIGTERM'
-kill_timeout = '5s'
+kill_timeout = '60s'
 console_command = 'python manage.py shell'
 
 [build]
@@ -32,8 +32,9 @@ console_command = 'python manage.py shell'
   min_machines_running = 2
 
   [http_service.concurrency]
-    type = 'requests'
-    soft_limit = 600
+    type = 'connections'
+    soft_limit = 20
+    hard_limit = 40
 
   [http_service.http_options]
     idle_timeout = 600

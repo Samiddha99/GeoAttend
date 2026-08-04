@@ -296,21 +296,48 @@ $(function(){
           body:"This bypasses the geo-fence and is recorded in the audit log.", confirmText:"Mark present"})
           .done(()=> GA.post("/attendance/api/sessions/"+sessionId+"/mark/", {student:sid, present:"1"}).done(refresh));
       });
-      if(d.status !== "OPEN"){
-        clearInterval(poll);
-        $("#live-timer").text("00:00").addClass("text-muted-2");
-      }
+      if(d.status !== "OPEN") closedUi();
     });
+  }
+
+  /**
+   * Everything that has to happen once the link is no longer open.
+   *
+   * The clock was the bug: setting the text to 00:00 without stopping the
+   * interval meant the countdown kept ticking and painted the old value back a
+   * second later, so a closed session appeared to still be running. And the
+   * buttons stayed live, offering Close and +5 min on something already shut.
+   */
+  function closedUi(){
+    clearInterval(poll);
+    if(timer){ timer.stop(); timer = null; }
+    $("#live-timer").text("00:00").removeClass("text-danger").addClass("text-muted-2");
+    $('[data-action]').prop("disabled", true);
   }
 
   $('[data-action]').on("click", function(){
     const action = $(this).data("action");
     if(!sessionId) return;
-    const run = ()=> GA.post("/attendance/api/sessions/"+sessionId+"/"+action+"/",
-        action==="extend" ? {minutes:5} : {}).done(function(res){
-      if(action==="extend" && timer) timer.reset(res.data.seconds_left);
-      refresh();
-    });
+    const $btn = $(this);
+    const run = function(){
+      // Disabled for the round trip, not just afterwards: closing is not
+      // idempotent from the teacher's point of view and a double tap on a
+      // slow connection should not send two.
+      GA.btnBusy($btn, true, action === "close" ? "Closing…" : "Working…");
+      GA.post("/attendance/api/sessions/"+sessionId+"/"+action+"/",
+              action==="extend" ? {minutes:5} : {})
+        .done(function(res){
+          if(action==="extend" && timer) timer.reset(res.data.seconds_left);
+          if(action==="close") closedUi();
+          refresh();
+        })
+        .always(function(){
+          GA.btnBusy($btn, false);
+          // closedUi() disables the whole set; btnBusy would otherwise undo it
+          // for this one button on the way out.
+          if(action === "close") $('[data-action]').prop("disabled", true);
+        });
+    };
     if(action==="close") GA.confirm({title:"Close this attendance link?", body:"Students will no longer be able to mark in."}).done(run);
     else run();
   });

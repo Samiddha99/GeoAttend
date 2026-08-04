@@ -10,9 +10,14 @@ forwarded_allow_ips = "*"
 workers = 1
 # threads = multiprocessing.cpu_count()*(2 + 1)
 threads = 3 # each of the worker could handle 3 requests at a time.
-worker_class = 'gthread'
+# Overridden on the command line by -k uvicorn.workers.UvicornWorker, which is
+# what serves the WebSocket. Left here so a WSGI run still has a sane default.
+worker_class = 'uvicorn_worker.UvicornWorker'
 worker_connections = 1000
-timeout = 30
+# A WebSocket is a long-lived connection by definition; the old 30s would cut
+# a student off mid-verification. Uvicorn does not apply this to sockets, but
+# face inference on a slow request should not be reaped either.
+timeout = 120
 keepalive = 5
 accesslog = "-"
 errorlog = "-"

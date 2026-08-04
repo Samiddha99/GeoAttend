@@ -65,9 +65,16 @@ COPY requirements.txt /tmp/requirements.txt
 # RUN . venv/bin/activate
 RUN set -ex && \
     pip install --upgrade pip && \
-    pip install -r /tmp/requirements.txt --upgrade
+    pip install -r /tmp/requirements.txt --upgrade && \
+    pip uninstall -y opencv-python opencv-contrib-python && \
+    pip install --no-cache-dir opencv-python-headless
 
-COPY . /code
+RUN python -c "from insightface.app import FaceAnalysis; \
+    FaceAnalysis(name='buffalo_s', providers=['CPUExecutionProvider']).prepare(ctx_id=-1)"
+
+    COPY . /code
+
+# COPY models/antispoof.onnx /code/models/
 
 RUN pwd
 RUN ls

@@ -76,10 +76,17 @@
       </div>
       <div class="card-body">
         <div class="tab-content">
-          <div class="tab-pane fade show active" id="t1"><div id="present-tbl"></div></div>
-          <div class="tab-pane fade" id="t2"><div id="absent-tbl"></div></div>
+          <div class="tab-pane fade show active" id="t1">
+            <div class="input-group input-group-sm mb-3" style="max-width:300px"><span class="input-group-text"><i class="fa-solid fa-magnifying-glass"></i></span><input class="form-control" id="s-present" placeholder="Name, class roll or exam roll…"></div>
+            <div id="present-tbl"></div>
+          </div>
+          <div class="tab-pane fade" id="t2">
+            <div class="input-group input-group-sm mb-3" style="max-width:300px"><span class="input-group-text"><i class="fa-solid fa-magnifying-glass"></i></span><input class="form-control" id="s-absent" placeholder="Name, class roll or exam roll…"></div>
+            <div id="absent-tbl"></div>
+          </div>
           <div class="tab-pane fade" id="t3">
             <p class="text-muted-2 fs-13">Every blocked attempt is logged — useful when investigating proxy attendance.</p>
+            <div class="input-group input-group-sm mb-3" style="max-width:300px"><span class="input-group-text"><i class="fa-solid fa-magnifying-glass"></i></span><input class="form-control" id="s-attempts" placeholder="Name, class roll or exam roll…"></div>
             <div id="attempts-tbl"></div>
           </div>
         </div>
@@ -103,7 +110,7 @@ $(function(){
   function refresh(){
     // once:true — this refreshes on a timer, so only the first load shows a
     // skeleton; later polls must not dim the panel every few seconds.
-    GA.loading("#present-tbl, #absent-tbl", {rows:6, cols:4, once:true});
+    GA.loading("#present-tbl, #absent-tbl", {rows:6, cols:5, once:true});
     GA.loading(SD_STATS, {once:true});
     GA.get("/attendance/api/sessions/"+id+"/status/", {}, {quiet:true}).done(function(res){
       const d = res.data;
@@ -115,10 +122,15 @@ $(function(){
       $("#n1").text(d.present_count); $("#n2").text(d.absent_count);
       $("#url").text(d.url);
       if(!pTable){
-        pTable = GA.table("#present-tbl", { perPage:15, rows:d.present, empty:"Nobody has marked in yet.", columns:[
+        pTable = GA.table("#present-tbl", { perPage:15, rows:d.present, search:"#s-present",
+          empty:"Nobody has marked in yet.", columns:[
           { key:"name", label:"Student", render:(v,r)=>'<div class="d-flex align-items-center gap-2">'+GA.avatar(v)+
             '<div><div class="fw-600">'+GA.esc(v)+'</div><small class="text-muted-2">'+GA.esc(r.email)+'</small></div></div>' },
           { key:"roll", label:"Class roll" },
+          // Optional on the student record, so a blank one gets a dash rather
+          // than an empty cell that reads as a rendering fault.
+          { key:"exam_roll", label:"Exam roll",
+            render:v=> v ? GA.esc(v) : '<span class="text-muted-2">—</span>' },
           { key:"at", label:"Marked at" },
           { key:"distance", label:"Distance", render:v=> v==null ? '<span class="ga-pill pill-violet">manual</span>' :
             '<span class="ga-pill '+(v<=25?'pill-green':'pill-amber')+'">'+v+' m</span>' },
@@ -126,10 +138,13 @@ $(function(){
           { key:"student_id", label:"", sortable:false, className:"text-end", render:v=>
             '<button class="btn btn-light btn-sm unmark" data-id="'+v+'" title="Undo"><i class="fa-solid fa-xmark text-danger"></i></button>' }
         ]});
-        aTable = GA.table("#absent-tbl", { perPage:15, rows:d.absent, empty:"Nobody is absent. 🎉", columns:[
+        aTable = GA.table("#absent-tbl", { perPage:15, rows:d.absent, search:"#s-absent",
+          empty:"Nobody is absent. 🎉", columns:[
           { key:"name", label:"Student", render:(v,r)=>'<div class="d-flex align-items-center gap-2">'+GA.avatar(v)+
             '<div><div class="fw-600">'+GA.esc(v)+'</div><small class="text-muted-2">'+GA.esc(r.email)+'</small></div></div>' },
           { key:"roll", label:"Class roll" },
+          { key:"exam_roll", label:"Exam roll",
+            render:v=> v ? GA.esc(v) : '<span class="text-muted-2">—</span>' },
           { key:"student_id", label:"", sortable:false, className:"text-end", render:v=>
             '<button class="btn btn-light btn-sm markp" data-id="'+v+'"><i class="fa-solid fa-user-check text-success me-1"></i>Mark present</button>' }
         ]});
@@ -153,22 +168,57 @@ $(function(){
         new QRCode(document.getElementById("qr"), {text:d.url, width:120, height:120});
         $("#copy").off().on("click", ()=> GA.copy(d.url));
       }
-      if(d.status !== "OPEN") clearInterval(poll);
+      if(d.status !== "OPEN") closedUi();
     });
+  }
+
+  /**
+   * Once the link is closed, stop pretending it is not.
+   *
+   * timer.stop() is the part that was missing: clearing the poll left the
+   * countdown running, so a closed session kept counting down as though
+   * students could still mark into it.
+   */
+  function closedUi(){
+    clearInterval(poll);
+    if(timer){ timer.stop(); timer = null; }
+    $("#cd").text("00:00").removeClass("text-danger").addClass("text-muted-2");
+    $('[data-action]').prop("disabled", true);
   }
 
   $('[data-action]').on("click", function(){
     const action=$(this).data("action");
-    const run = ()=> GA.post("/attendance/api/sessions/"+id+"/"+action+"/", action==="extend"?{minutes:5}:{})
-      .done(function(res){ if(action==="extend" && timer) timer.reset(res.data.seconds_left); refresh(); });
+    const $btn = $(this);
+    const run = function(){
+      // Held disabled for the round trip: a double tap on a slow connection
+      // should not send two close requests.
+      GA.btnBusy($btn, true, action === "close" ? "Closing…" : "Working…");
+      GA.post("/attendance/api/sessions/"+id+"/"+action+"/", action==="extend"?{minutes:5}:{})
+        .done(function(res){
+          if(action==="extend" && timer) timer.reset(res.data.seconds_left);
+          if(action==="close") closedUi();
+          refresh();
+        })
+        .always(function(){
+          GA.btnBusy($btn, false);
+          // btnBusy re-enables the button it was given; closedUi disabled the
+          // whole set, so put that back after it.
+          if(action === "close") $('[data-action]').prop("disabled", true);
+        });
+    };
     if(action==="close") GA.confirm({title:"Close this attendance link?"}).done(run); else run();
   });
 
   $('[data-bs-target="#t3"]').on("shown.bs.tab", function(){
     GA.get("/attendance/api/sessions/"+id+"/attempts/").done(function(res){
-      GA.table("#attempts-tbl", { perPage:12, rows:res.data.rows, empty:"No blocked attempts — clean session.", columns:[
+      GA.table("#attempts-tbl", { perPage:12, rows:res.data.rows, search:"#s-attempts",
+        empty:"No blocked attempts — clean session.", columns:[
         { key:"at", label:"Time" },
         { key:"user", label:"Student", render:(v,r)=>'<div><div class="fw-600">'+GA.esc(v)+'</div><small class="text-muted-2">'+GA.esc(r.email)+'</small></div>' },
+        // Blank for an attempt with no student profile behind it — a teacher
+        // opening the link, or an account still mid-registration.
+        { key:"roll", label:"Class roll", render:v=> v || '<span class="text-muted-2">—</span>' },
+        { key:"exam_roll", label:"Exam roll", render:v=> v || '<span class="text-muted-2">—</span>' },
         { key:"reason", label:"Outcome", render:(v,r)=>GA.statusPill(r.code==="OK"?"PRESENT":"ABSENT")+' <small class="ms-1">'+GA.esc(v)+'</small>' },
         { key:"distance", label:"Distance", render:v=> v==null?'—':v+' m' },
         { key:"accuracy", label:"GPS ±", render:v=> v==null?'—':v+' m' },

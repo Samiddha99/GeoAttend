@@ -1,3 +1,5 @@
+import logging
+
 from django.conf import settings
 from django.contrib.auth import authenticate, login, logout, update_session_auth_hash
 from django.contrib.auth.decorators import login_required
@@ -22,8 +24,12 @@ from .forms import (
     ProfileForm,
     ResetPasswordForm,
 )
+from . import face_service
+from .face import FaceError
 from .models import ActivityLog, EmailOTP, Invitation, User
 from .services import activate_invitee, create_institute_and_head, unlink_device
+
+log = logging.getLogger("geoattend")
 
 SIGNUP_SESSION_KEY = "signup_otp_id"
 
@@ -95,6 +101,51 @@ def complete_profile(request):
     if request.user.registration_completed:
         return redirect("dashboard:home")
     return render(request, "accounts/complete_profile.html")
+
+
+# --------------------------------------------------------------------------- #
+#  Face enrolment
+# --------------------------------------------------------------------------- #
+@login_required
+@ensure_csrf_cookie
+def face_capture_page(request):
+    """
+    Where a student is held until their face is on file.
+
+    Deliberately reachable only by someone who still needs it: a student who
+    has enrolled is sent to their dashboard rather than being offered a second
+    capture, because re-enrolment is staff's to authorise.
+    """
+    if not face_service.needs_enrolment(request.user):
+        return redirect("dashboard:home")
+    return render(request, "accounts/face_capture.html", {
+        "poses": face_service.POSES,
+    })
+
+
+@login_required
+@require_POST
+def api_face_enrol(request):
+    """Three frames in, one enrolment out — or one message saying why not."""
+    uploads = {pose: request.FILES.get(pose.lower()) for pose in face_service.POSES}
+    try:
+        face_service.enrol(user=request.user, uploads=uploads, request=request)
+    except FaceError as exc:
+        # Logged as well as returned. A refusal is a 400 whose reason lives
+        # only in the response body, so without this line the server log says
+        # "Bad Request" and nothing else — which is no help at all when a
+        # student rings up to say enrolment will not work.
+        log.warning("Face enrolment refused for %s: %s (%s) %s",
+                    request.user.email, exc.code, exc.message,
+                    exc.detail or "")
+        # `pose` lets the page send the student back to the one angle that was
+        # refused instead of making them repeat all three. Absent for refusals
+        # that belong to no single frame, such as "these are not the same
+        # person" — and the page starts over in that case, which is right.
+        return fail(exc.message, code=exc.code, status=400,
+                    pose=exc.detail.get("pose", ""))
+    return ok({"redirect": reverse("dashboard:home")},
+              message="Face captured. You're all set.")
 
 
 @login_required

@@ -57,6 +57,12 @@ urlpatterns = [
     path("api/students/<oid:pk>/resend/", views.api_student_resend, name="api_student_resend"),
     path("api/students/<oid:pk>/reset-device/", views.api_student_reset_device,
          name="api_student_reset_device"),
+    path("api/students/<oid:pk>/reset-face/", views.api_student_reset_face,
+         name="api_student_reset_face"),
+    path("api/students/<oid:pk>/face/", views.api_student_face,
+         name="api_student_face"),
+    path("api/students/<oid:pk>/face/<str:pose>/", views.api_student_face_image,
+         name="api_student_face_image"),
     path("api/imports/", views.api_import_jobs, name="api_import_jobs"),
     path("api/imports/<oid:pk>/", views.api_import_job_detail, name="api_import_job_detail"),
 ]

@@ -154,10 +154,19 @@ def _log_attempt(session, user, reason, request=None, lat=None, lng=None,
     )
 
 
-def mark_attendance(*, request, session, latitude, longitude, accuracy=None, client_hash=""):
+def check_mark_allowed(*, request, session, latitude, longitude, accuracy=None,
+                       client_hash=""):
     """
-    Validate and persist a student's presence.
-    Raises AttendanceError with a friendly message on every failure path.
+    Every gate that stands between a student and a present mark, with nothing
+    written.
+
+    Split out from mark_attendance so the same rules can run once over HTTP and
+    the result be carried into the face-matching socket. Two copies of these
+    checks would drift, and the one that drifted would be the one a student
+    found.
+
+    Returns the values the caller needs to persist: profile, fingerprint,
+    distance and accuracy.
     """
     user = request.user
     fingerprint = device_fingerprint(request, client_hash)
@@ -230,7 +239,21 @@ def mark_attendance(*, request, session, latitude, longitude, accuracy=None, cli
             distance_m=round(distance, 1),
         )
 
-    # --- persist ----------------------------------------------------------- #
+    return {
+        "profile": profile,
+        "fingerprint": fingerprint,
+        "distance": distance,
+        "accuracy": accuracy,
+        "latitude": float(latitude),
+        "longitude": float(longitude),
+    }
+
+
+def persist_mark(*, request, session, cleared, ip=None, user_agent=""):
+    """Write the present mark from an already-cleared attempt."""
+    user = request.user if request is not None else cleared["profile"].user
+    profile = cleared["profile"]
+    distance = cleared["distance"]
     try:
         with transaction.atomic():
             record = AttendanceRecord.objects.create(
@@ -238,22 +261,36 @@ def mark_attendance(*, request, session, latitude, longitude, accuracy=None, cli
                 student=profile,
                 status=AttendanceRecord.Status.PRESENT,
                 marked_at=timezone.now(),
-                latitude=round(float(latitude), 6),
-                longitude=round(float(longitude), 6),
-                accuracy_m=accuracy or None,
+                latitude=round(cleared["latitude"], 6),
+                longitude=round(cleared["longitude"], 6),
+                accuracy_m=cleared["accuracy"] or None,
                 distance_m=round(distance, 2),
-                ip=client_ip(request) or None,
-                user_agent=request.META.get("HTTP_USER_AGENT", "")[:400],
-                device_fingerprint=fingerprint,
+                ip=(client_ip(request) if request is not None else ip) or None,
+                user_agent=(request.META.get("HTTP_USER_AGENT", "")[:400]
+                            if request is not None else user_agent[:400]),
+                device_fingerprint=cleared["fingerprint"],
             )
     except IntegrityError:
         raise AttendanceError("Your attendance for this class is already marked.",
                               "DUPLICATE", 409)
 
-    user.bind_device(fingerprint)
-    _log_attempt(session, user, MarkAttempt.Reason.OK, request, latitude, longitude,
-                 accuracy, distance, fingerprint, "accepted")
+    user.bind_device(cleared["fingerprint"])
+    _log_attempt(session, user, MarkAttempt.Reason.OK, request,
+                 cleared["latitude"], cleared["longitude"], cleared["accuracy"],
+                 distance, cleared["fingerprint"], "accepted")
     return record, round(distance, 1)
+
+
+def mark_attendance(*, request, session, latitude, longitude, accuracy=None,
+                    client_hash=""):
+    """
+    Validate and persist a student's presence.
+    Raises AttendanceError with a friendly message on every failure path.
+    """
+    cleared = check_mark_allowed(
+        request=request, session=session, latitude=latitude, longitude=longitude,
+        accuracy=accuracy, client_hash=client_hash)
+    return persist_mark(request=request, session=session, cleared=cleared)
 
 
 # --------------------------------------------------------------------------- #

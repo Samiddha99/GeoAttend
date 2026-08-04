@@ -5,12 +5,14 @@ from django.db import IntegrityError, transaction
 from django.db.models import Count, Prefetch, Q
 from django.http import FileResponse, Http404
 from django.shortcuts import get_object_or_404, render
+from django.urls import reverse
 from django.utils import timezone
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.decorators.http import require_GET, require_POST
 
 from accounts.emails import send_invitation
-from accounts.models import ActivityLog, Invitation
+from accounts import face_service
+from accounts.models import ActivityLog, FaceEnrolment, FaceSample, Invitation
 from accounts.services import invite_user, unlink_device
 from notifications.whatsapp import normalise_msisdn
 from core.decorators import role_required
@@ -720,6 +722,9 @@ def api_students(request):
             timezone.localtime(s.user.device_bound_at).strftime("%d %b %Y, %H:%M")
             if s.user.device_bound_at else ""
         ),
+        # The gate is hard, so staff need to see at a glance who is stuck
+        # behind it and have the reset button to hand.
+        "face_enrolled": bool(s.user.face_enrolled),
     } for s in qs.distinct()[:2000]]
     return ok({"rows": rows, "count": len(rows)})
 
@@ -882,6 +887,88 @@ def api_student_reset_device(request, pk):
         {"device_bound": False},
         message=(f"Device unlinked for {student.name}. They can now mark attendance "
                  "from a new device, which will then become their registered one."),
+    )
+
+
+@role_required(HEAD, HOD, TEACHER)
+@require_GET
+def api_student_face(request, pk):
+    """
+    What a student's enrolment holds, so staff can look at it.
+
+    Metadata and per-image URLs only — the pictures themselves come from the
+    view below, which re-checks who is asking. A face on file that nobody can
+    look at is impossible to audit: you cannot tell an enrolment of the right
+    student from one taken of a friend without seeing it.
+    """
+    student = get_object_or_404(all_students_for(request.user), pk=pk)
+    enrolment = (FaceEnrolment.objects
+                 .filter(user=student.user)
+                 .prefetch_related("samples").first())
+    samples = list(enrolment.samples.all()) if enrolment else []
+    return ok({
+        "student": student.name,
+        "class_roll": student.class_roll,
+        "captured_at": (timezone.localtime(enrolment.created_at).strftime("%d %b %Y, %H:%M")
+                        if enrolment else ""),
+        "model": enrolment.model_name if enrolment else "",
+        "rows": [{
+            "pose": s.pose,
+            "label": s.get_pose_display(),
+            "url": reverse("academics:api_student_face_image",
+                           args=[student.pk, s.pose.lower()]),
+            # The angle the server measured at enrolment, not what the browser
+            # claimed — useful when a capture looks off.
+            "yaw": round(s.yaw, 1),
+        } for s in samples],
+    })
+
+
+@role_required(HEAD, HOD, TEACHER)
+@require_GET
+def api_student_face_image(request, pk, pose):
+    """
+    One enrolment photo.
+
+    Streamed through here rather than linked from the storage account so the
+    permission check runs on every fetch: a URL copied out of the page is
+    useless to anyone who cannot already see that student.
+    """
+    student = get_object_or_404(all_students_for(request.user), pk=pk)
+    sample = get_object_or_404(
+        FaceSample, enrolment__user=student.user, pose=(pose or "").upper())
+    # Always image/jpeg: every one of these came from the capture canvas, which
+    # only ever produces JPEG. Declared explicitly and with nosniff, so a file
+    # that somehow was not one cannot be re-interpreted as something executable.
+    response = FileResponse(sample.image.open("rb"), content_type="image/jpeg")
+    response["X-Content-Type-Options"] = "nosniff"
+    response["Content-Disposition"] = (
+        f'inline; filename="{student.class_roll or student.pk}-{sample.pose.lower()}.jpg"')
+    return response
+
+
+@role_required(HEAD, HOD, TEACHER)
+@require_POST
+def api_student_reset_face(request, pk):
+    """
+    Let a student capture their face again.
+
+    Same reach as the device unlink — head, HoD or any teacher via
+    `all_students_for` — because the student will ask whoever is nearby, and a
+    stale template rejecting the real person is not a reason to make them walk
+    across campus. Logged, because a reset is also how a proxy enrolment would
+    begin.
+    """
+    student = get_object_or_404(all_students_for(request.user), pk=pk)
+    reason = (request.POST.get("reason") or "").strip()[:200]
+    cleared = face_service.clear(
+        user=student.user, actor=request.user, reason=reason, request=request)
+    if not cleared:
+        return fail(f"{student.name} has not captured a face yet.")
+    return ok(
+        {"face_enrolled": False},
+        message=(f"Face cleared for {student.name}. They will be asked to "
+                 "capture it again next time they sign in."),
     )
 
 
