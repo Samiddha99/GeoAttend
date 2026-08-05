@@ -1198,6 +1198,36 @@ window.GA = (function ($) {
       esc(item.status_label) + '">' + esc(item.subject) + "</span>";
   }
 
+  /**
+   * A star rating as stars.
+   *
+   * Half-stars deliberately: an average of 3.5 shown as three stars reads as
+   * worse than it is, and as four reads as better.
+   */
+  function stars(value, opts) {
+    const o = $.extend({ show: true }, opts || {});
+    const n = Number(value) || 0;
+    let html = "";
+    for (let i = 1; i <= 5; i++) {
+      const cls = n >= i ? "fa-solid fa-star"
+                : n >= i - 0.5 ? "fa-solid fa-star-half-stroke"
+                : "fa-regular fa-star";
+      html += '<i class="' + cls + '" style="color:#f59e0b"></i> ';
+    }
+    return html + (o.show && n
+      ? '<span class="fw-600 ms-1">' + n.toFixed(1) + "</span>" : "");
+  }
+
+  /** Sidebar count of feedback forms a student still owes. */
+  function feedbackBadge(n) {
+    const $b = $("#ga-feedback-badge");
+    if (!$b.length) return;
+    n = Number(n) || 0;
+    $b.text(n > 99 ? "99+" : n)
+      .attr("title", n === 1 ? "1 form waiting" : n + " forms waiting")
+      .toggleClass("d-none", n === 0);
+  }
+
   /** A clickable chip for one subject decision. */
   function plannedChip(decision) {
     const tone = decision.status === "APPROVED" ? "pill-green"
@@ -1245,6 +1275,6 @@ window.GA = (function ($) {
     loading, done, chartIsEmpty, spin, absenceReason, absenceCell,
     plannedDecision, plannedChip, reasonDetail, reasonChip,
     attachmentList, attachField, attachCheck, attachForm, ATTACH,
-    reviewBadge, downloadCsv, csvText
+    stars, feedbackBadge, reviewBadge, downloadCsv, csvText
   };
 })(jQuery);

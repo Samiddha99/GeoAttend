@@ -1,0 +1,282 @@
+{% extends "layouts/app.html" %}
+{% block page_title %}Class feedback{% endblock %}
+{% block page_sub %}Tell your teachers how a class went. Your answers are shown to
+staff without your name attached.{% endblock %}
+
+{% block content %}
+<ul class="nav nav-tabs mb-3">
+  <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-pending">
+    <i class="fa-solid fa-inbox me-1"></i>Waiting for you
+    <span class="ga-pill pill-amber ms-1" id="pending-badge">0</span></button></li>
+  <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-done">
+    <i class="fa-solid fa-circle-check me-1"></i>Already given</button></li>
+</ul>
+
+<div class="tab-content">
+  <div class="tab-pane fade show active" id="tab-pending">
+    <div class="alert alert-light border fs-13">
+      <i class="fa-solid fa-circle-info text-primary me-2"></i>
+      Each form stays open for <b>24 hours</b> after your teacher sends it. Once it
+      closes it disappears from this list — it is not counted against you.
+    </div>
+    <div class="card"><div class="card-body"><div id="tbl-pending"></div></div></div>
+  </div>
+
+  <div class="tab-pane fade" id="tab-done">
+    <div class="card"><div class="card-body"><div id="tbl-done"></div></div></div>
+  </div>
+</div>
+
+<!-- the form itself -->
+<div class="modal fade" id="form-modal" tabindex="-1" data-bs-backdrop="static">
+  <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
+    <div class="modal-content"><form id="feedback-form">{% csrf_token %}
+      <div class="modal-header">
+        <div>
+          <h5 class="modal-title mb-0"><i class="fa-solid fa-comment-dots me-2 text-primary"></i>
+            How was this class?</h5>
+          <small class="text-muted-2" id="form-context"></small>
+        </div>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div id="questions"></div>
+
+        <hr>
+        <label class="form-label">Overall, how would you rate this class? *</label>
+        <div class="ga-stars mb-3" id="stars">
+          {% for i in "12345" %}<i class="fa-regular fa-star" data-star="{{ forloop.counter }}"></i>{% endfor %}
+          <span class="text-muted-2 fs-13 ms-2" id="star-label">Tap a star</span>
+        </div>
+
+        <label class="form-label">Anything else? <span class="text-muted-2">(optional)</span></label>
+        <textarea class="form-control" name="remarks" id="remarks" rows="3" maxlength="1000"
+                  placeholder="Anything the teacher could do differently"></textarea>
+        <div class="form-text">
+          Staff see this alongside everyone else's, without your name.
+        </div>
+        <div class="invalid-feedback d-block" id="form-err"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+        <button type="submit" class="btn btn-primary">Send feedback</button>
+      </div>
+    </form></div>
+  </div>
+</div>
+
+<!-- what a student sent -->
+<div class="modal fade" id="view-modal" tabindex="-1"><div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
+  <div class="modal-content">
+    <div class="modal-header"><h5 class="modal-title">
+      <i class="fa-solid fa-circle-check me-2 text-success"></i>Your feedback</h5>
+      <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+    <div class="modal-body" id="view-body"></div>
+    <div class="modal-footer">
+      <button type="button" class="btn btn-light" data-bs-dismiss="modal">Close</button>
+    </div>
+  </div>
+</div></div>
+{% endblock %}
+
+{% block scripts %}
+{{ questions|json_script:"questions-data" }}
+<style>
+  .ga-stars i{font-size:1.6rem;color:#f59e0b;cursor:pointer;margin-right:.15rem}
+  .ga-qgroup{font-size:.78rem;font-weight:700;letter-spacing:.06em;
+    color:var(--bs-secondary-color);border-bottom:1px solid var(--bs-border-color);
+    padding-bottom:.25rem;margin:1.25rem 0 .6rem}
+  .ga-qgroup:first-child{margin-top:0}
+  .ga-q{border:1px solid var(--bs-border-color);border-radius:12px;padding:.75rem 1rem;margin-bottom:.6rem}
+  .ga-q.answered{border-color:#22c55e}
+  .ga-q .form-check{margin-bottom:.15rem;border-radius:8px;padding:.2rem .5rem .2rem 2rem}
+
+  /* Each option tinted by what it is worth. The colour is derived from the
+     score in questions.py, so it can never disagree with the number. */
+  .ga-opt-good  .form-check-label{color:#15803d}
+  .ga-opt-fair  .form-check-label{color:#4d7c0f}
+  .ga-opt-warn  .form-check-label{color:#b45309}
+  .ga-opt-bad   .form-check-label{color:#b91c1c}
+  .ga-opt-neutral .form-check-label{color:var(--bs-body-color)}
+  .ga-opt-good  .form-check-input:checked{background-color:#16a34a;border-color:#16a34a}
+  .ga-opt-fair  .form-check-input:checked{background-color:#65a30d;border-color:#65a30d}
+  .ga-opt-warn  .form-check-input:checked{background-color:#d97706;border-color:#d97706}
+  .ga-opt-bad   .form-check-input:checked{background-color:#dc2626;border-color:#dc2626}
+  .ga-opt-good.picked{background:#f0fdf4}
+  .ga-opt-fair.picked{background:#f7fee7}
+  .ga-opt-warn.picked{background:#fffbeb}
+  .ga-opt-bad.picked{background:#fef2f2}
+  .ga-opt-neutral.picked{background:#f1f5f9}
+</style>
+<script>
+$(function(){
+  const QUESTIONS = JSON.parse(document.getElementById("questions-data").textContent);
+  let pendingTable = null, doneTable = null, current = null, rating = 0;
+
+  const cols = (done) => [
+    { key:"date", label:"Class", render:(v,r)=>
+      '<div class="fw-600">'+GA.esc(v)+'</div>'+
+      '<small class="text-muted-2">'+GA.esc(r.batch)+'</small>' },
+    { key:"subject", label:"Subject", render:(v,r)=>
+      '<span class="ga-pill pill-violet" title="'+GA.esc(r.subject_name)+'">'+GA.esc(v)+'</span>' },
+    { key:"teacher", label:"Teacher" },
+    done
+      ? { key:"submitted_at", label:"You answered" }
+      : { key:"closes_at", label:"Closes", render:(v,r)=>
+          '<div>'+GA.esc(v)+'</div><small class="text-muted-2">'+
+          Math.max(0, Math.round(r.seconds_left/3600))+' h left</small>' },
+    { key:"id", label:"", sortable:false, className:"text-end", render:(v,r)=> done
+        ? '<button class="btn btn-light btn-sm view" data-id="'+v+'">'+
+          '<i class="fa-solid fa-eye me-1"></i>View</button>'
+        : '<button class="btn btn-primary btn-sm answer" data-id="'+v+'">Give feedback</button>' }
+  ];
+
+  function load(){
+    GA.loading("#tbl-pending", {rows:4, cols:5});
+    return GA.get("{% url 'feedback:api_my_feedback' %}").done(function(res){
+      const d = res.data;
+      $("#pending-badge").text(d.pending_count).toggleClass("d-none", !d.pending_count);
+      if(!pendingTable) pendingTable = GA.table("#tbl-pending", {
+        csvName:"pending-feedback", columns:cols(false), rows:d.pending, perPage:10,
+        empty:"Nothing waiting — you are all caught up."});
+      else pendingTable.setRows(d.pending);
+      if(!doneTable) doneTable = GA.table("#tbl-done", {
+        csvName:"my-feedback", columns:cols(true), rows:d.submitted, perPage:10,
+        empty:"You have not given feedback on any class yet."});
+      else doneTable.setRows(d.submitted);
+      GA.feedbackBadge && GA.feedbackBadge(d.pending_count);
+      bind(d);
+    });
+  }
+
+  function bind(d){
+    $("#tbl-pending").off("click", ".answer").on("click", ".answer", function(){
+      openForm($(this).attr("data-id"), $(this));
+    });
+    $("#tbl-done").off("click", ".view").on("click", ".view", function(){
+      const id = $(this).attr("data-id");
+      const row = d.submitted.find(r => String(r.id) === String(id));
+      if(row) showAnswers(row);
+    });
+  }
+
+  /* --------------------------------------------------------- the form */
+  function renderQuestions(){
+    // Grouped, because ten flat questions read as a wall and people stop
+    // reading before the end — which is where the honest answers live. The
+    // server already sorts them by group, so a heading appears exactly once
+    // per group rather than every time the group happens to change.
+    let html = "", group = null;
+    QUESTIONS.forEach(function(q){
+      if(q.group !== group){
+        group = q.group;
+        html += '<div class="ga-qgroup">'+GA.esc(group.toUpperCase())+'</div>';
+      }
+      html += '<div class="ga-q" data-q="'+q.key+'"><div class="fw-600 fs-14 mb-2">'+
+        GA.esc(q.text)+'</div>';
+      q.options.forEach(function(o, i){
+        const id = q.key+"-"+i;
+        html += '<div class="form-check ga-opt-'+o.tone+'">'+
+          '<input class="form-check-input" type="radio" '+
+          'name="'+q.key+'" id="'+id+'" value="'+o.value+'">'+
+          '<label class="form-check-label" for="'+id+'">'+GA.esc(o.label)+'</label></div>';
+      });
+      html += '</div>';
+    });
+    $("#questions").html(html);
+    $("#questions input[type=radio]").on("change", function(){
+      const $q = $(this).closest(".ga-q");
+      $q.addClass("answered");
+      // Tint only the chosen row, so the answer stands out without the whole
+      // list looking like a traffic light.
+      $q.find(".form-check").removeClass("picked");
+      $(this).closest(".form-check").addClass("picked");
+    });
+  }
+
+  function openForm(id, $btn){
+    // The questions come from the server, so there is a round trip between the
+    // click and the modal. Without this the button looks broken for a beat and
+    // people press it again.
+    GA.btnBusy($btn, true, "Opening…");
+    GA.get("/feedback/api/forms/"+id+"/", {}, {quiet:true}).done(function(res){
+      current = res.data.form;
+      rating = 0;
+      $("#form-context").text(current.subject+" — "+current.subject_name+" · "+
+                              current.teacher+" · "+current.date);
+      renderQuestions();
+      $("#remarks").val("");
+      $("#form-err").text("");
+      $("#stars i").attr("class","fa-regular fa-star");
+      $("#star-label").text("Tap a star");
+      new bootstrap.Modal("#form-modal").show();
+    }).fail(function(xhr){
+      const r = (xhr && xhr.responseJSON) || {};
+      GA.toast(r.message || "That form is no longer available.", "warn");
+      load();
+    }).always(function(){
+      GA.btnBusy($btn, false);
+    });
+  }
+
+  $("#stars").on("click", "i", function(){
+    rating = parseInt($(this).data("star"), 10);
+    $("#stars i").each(function(){
+      const n = parseInt($(this).data("star"), 10);
+      $(this).attr("class", n <= rating ? "fa-solid fa-star" : "fa-regular fa-star");
+    });
+    $("#star-label").text(["","Poor","Fair","Good","Very good","Excellent"][rating]);
+  });
+
+  $("#feedback-form").on("submit", function(e){
+    e.preventDefault();
+    $("#form-err").text("");
+    // Checked here so an unanswered question is pointed at rather than
+    // reported as a number by the server.
+    const missing = QUESTIONS.filter(q => !$('input[name="'+q.key+'"]:checked').length);
+    if(missing.length){
+      $("#form-err").text("Please answer every question — "+missing.length+" still to go.");
+      $('.ga-q[data-q="'+missing[0].key+'"]')[0].scrollIntoView({block:"center", behavior:"smooth"});
+      return;
+    }
+    if(!rating){ $("#form-err").text("Please give an overall star rating."); return; }
+
+    const data = {rating: rating, remarks: $("#remarks").val()};
+    QUESTIONS.forEach(q => data[q.key] = $('input[name="'+q.key+'"]:checked').val());
+    const $btn = $(this).find("[type=submit]");
+    GA.btnBusy($btn, true, "Sending…");
+    GA.post("/feedback/api/forms/"+current.id+"/submit/", data, {quiet:true})
+      .done(function(res){
+        GA.toast(res.message, "ok");
+        bootstrap.Modal.getInstance($("#form-modal")[0]).hide();
+        load();
+      })
+      .fail(function(xhr){
+        const r = (xhr && xhr.responseJSON) || {};
+        $("#form-err").text(r.message || "Could not send that.");
+      })
+      .always(()=> GA.btnBusy($btn, false));
+  });
+
+  function showAnswers(row){
+    $("#view-body").html(
+      '<div class="mb-2"><span class="ga-pill pill-violet">'+GA.esc(row.subject)+'</span> '+
+      '<span class="text-muted-2 fs-13">'+GA.esc(row.teacher)+' · '+GA.esc(row.date)+'</span></div>'+
+      '<div class="mb-3">'+GA.stars(row.rating)+'</div>'+
+      (row.answers||[]).map(a =>
+        '<div class="border-bottom py-2"><div class="fs-13 text-muted-2">'+GA.esc(a.text)+'</div>'+
+        '<div class="fw-600">'+GA.esc(a.answer)+'</div></div>').join("")+
+      (row.remarks
+        ? '<div class="border rounded-3 p-2 mt-3" style="background:#f8fafc">'+
+          '<div class="fs-12 text-muted-2 fw-600 mb-1">YOUR REMARKS</div>'+
+          '<div style="white-space:pre-wrap">'+GA.esc(row.remarks)+'</div></div>'
+        : "")+
+      '<div class="text-muted-2 fs-12 mt-3">Sent '+GA.esc(row.submitted_at)+
+      '. Staff see these answers without your name.</div>');
+    new bootstrap.Modal("#view-modal").show();
+  }
+
+  load();
+});
+</script>
+{% endblock %}

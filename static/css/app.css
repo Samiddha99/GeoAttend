@@ -411,3 +411,20 @@ tr:hover .ga-dial.wa:hover{ background:#25d366; }
 .ga-live-ring{position:absolute;inset:0;border:4px solid rgba(255,255,255,.35);
   border-radius:50%;transition:border-color .15s}
 .ga-live-ring.ok{border-color:#22c55e}
+
+/* ---- scrollable modals that contain a <form> ---------------------------
+   Bootstrap makes .modal-content a flex column, caps its height and lets
+   .modal-body scroll. A <form> wrapping header/body/footer sits between the
+   two and breaks that chain: it is a plain block, so .modal-body has no
+   bounded height and overflow-y:auto has nothing to act on — the content is
+   simply clipped and cannot be reached.
+
+   Giving the form the same flex behaviour restores it. Written against any
+   direct child so a <form> is not the only element this works for. */
+.modal-dialog-scrollable .modal-content > form,
+.modal-dialog-scrollable .modal-content > .modal-flex {
+  display: flex;
+  flex-direction: column;
+  max-height: 100%;
+  overflow: hidden;
+}

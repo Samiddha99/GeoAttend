@@ -1,0 +1,303 @@
+{% extends "layouts/app.html" %}
+{% block page_title %}Class feedback{% endblock %}
+{% block page_sub %}What students said about each class. Responses are shown
+without any way to tell who gave them.{% endblock %}
+
+{% block content %}
+<div class="card mb-3"><div class="card-body py-3 table-toolbar">
+  <select class="form-select form-select-sm" id="f-department" style="max-width:190px">
+    <option value="">All departments</option>
+    {% for d in departments %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}
+  </select>
+  <select class="form-select form-select-sm" id="f-teacher" style="max-width:190px">
+    <option value="">All teachers</option>
+    {% for t in teachers %}<option value="{{ t.id }}">{{ t.get_full_name }}</option>{% endfor %}
+  </select>
+  <select class="form-select form-select-sm" id="f-subject" style="max-width:190px">
+    <option value="">All subjects</option>
+    {% for s in subjects %}<option value="{{ s.id }}">{{ s.code }} — {{ s.name }}</option>{% endfor %}
+  </select>
+  <select class="form-select form-select-sm" id="f-batch" style="max-width:170px">
+    <option value="">All batches</option>
+    {% for b in batches %}<option value="{{ b.id }}">{{ b.label }}</option>{% endfor %}
+  </select>
+  <input type="date" class="form-control form-control-sm" id="f-date" style="max-width:150px"
+         title="A single day">
+  <span class="text-muted-2 fs-13">or</span>
+  <input type="date" class="form-control form-control-sm" id="f-start" style="max-width:150px">
+  <input type="date" class="form-control form-control-sm" id="f-end" style="max-width:150px">
+  <div class="ms-auto d-flex gap-2">
+    <button class="btn btn-light btn-sm" id="btn-clear">Clear</button>
+    <button class="btn btn-light btn-sm" id="btn-refresh"><i class="fa-solid fa-rotate"></i></button>
+  </div>
+</div></div>
+
+<div class="row g-3 mb-3" id="totals"></div>
+
+<div class="card"><div class="card-body"><div id="tbl"></div></div></div>
+
+<!-- one form in full -->
+<div class="modal fade" id="detail-modal" tabindex="-1">
+  <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <div>
+          <h5 class="modal-title mb-0"><i class="fa-solid fa-chart-column me-2 text-primary"></i>
+            Feedback on this class</h5>
+          <small class="text-muted-2" id="d-context"></small>
+        </div>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body" id="d-body"></div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-light" data-bs-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- one teacher, across everything they have taught -->
+<div class="modal fade" id="teacher-modal" tabindex="-1">
+  <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <div>
+          <h5 class="modal-title mb-0"><i class="fa-solid fa-user-tie me-2 text-primary"></i>
+            <span id="t-name"></span></h5>
+          <small class="text-muted-2" id="t-context"></small>
+        </div>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body" id="t-body"></div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-light" data-bs-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script>
+$(function(){
+  const MIN_RESPONSES = {{ min_responses }};
+  let table = null, rows = [], charts = [];
+
+  function killCharts(){ charts.forEach(c => c.destroy()); charts = []; }
+
+  const cols = [
+    { key:"date", label:"Class", value:r=>r.date_iso, csv:(v,r)=>r.date, render:(v,r)=>
+      '<div>'+GA.esc(r.date)+'</div><small class="text-muted-2">'+GA.esc(r.batch)+'</small>' },
+    { key:"subject", label:"Subject", render:(v,r)=>
+      '<span class="ga-pill pill-violet" title="'+GA.esc(r.subject_name)+'">'+GA.esc(v)+'</span>' },
+    { key:"teacher", label:"Teacher", render:(v,r)=>
+      '<a href="#" class="teacher-link fw-600" data-id="'+r.teacher_id+'">'+GA.esc(v)+'</a>' },
+    { key:"department", label:"Department" },
+    { key:"responses", label:"Responses", className:"text-center", render:(v,r)=>
+      '<div class="fw-600">'+v+' / '+r.sent+'</div>'+
+      '<small class="text-muted-2">'+r.response_rate+'%</small>' },
+    { key:"average_rating", label:"Rating", width:"160px", render:v=> v == null
+        ? '<span class="text-muted-2">—</span>' : GA.stars(v) },
+    { key:"score", label:"Overall", width:"140px", render:v=> v == null
+        ? '<span class="text-muted-2">—</span>' : GA.bar(v) },
+    { key:"open", label:"", sortable:false, className:"text-end", render:(v,r)=>
+      (v ? '<span class="ga-pill pill-green me-1">open</span>' : '')+
+      '<button class="btn btn-light btn-sm detail" data-id="'+r.id+'">'+
+      '<i class="fa-solid fa-chevron-right"></i></button>' }
+  ];
+
+  function filters(){
+    return GA.query({
+      department: $("#f-department").val(), teacher: $("#f-teacher").val(),
+      subject: $("#f-subject").val(), batch: $("#f-batch").val(),
+      date: $("#f-date").val(), start: $("#f-start").val(), end: $("#f-end").val(),
+    });
+  }
+
+  function load(){
+    GA.loading("#tbl", {rows:8, cols:7});
+    GA.loading("#totals", {kind:"stat"});
+    return GA.get("{% url 'feedback:api_forms' %}", filters()).done(function(res){
+      rows = res.data.rows;
+      const t = res.data.totals;
+      $("#totals").html([
+        ["Forms", t.forms, "fa-clipboard-list", "bg-grad-1"],
+        ["Responses", t.responses, "fa-comments", "bg-grad-3"],
+        ["Average rating", t.average_rating == null ? "—" : t.average_rating.toFixed(2),
+         "fa-star", "bg-grad-5"],
+      ].map(x =>
+        '<div class="col-6 col-md-4"><div class="card"><div class="card-body d-flex align-items-center gap-3">'+
+        '<div class="icon '+x[3]+'" style="width:42px;height:42px;border-radius:11px;display:grid;place-items:center;color:#fff">'+
+        '<i class="fa-solid '+x[2]+'"></i></div><div><div class="fw-bold fs-4 lh-1">'+x[1]+'</div>'+
+        '<small class="text-muted-2">'+x[0]+'</small></div></div></div></div>').join(""));
+      GA.done("#totals");
+
+      if(!table) table = GA.table("#tbl", {csvName:"class-feedback", columns:cols, rows:rows,
+        perPage:15, empty:"No feedback forms match these filters."});
+      else table.setRows(rows);
+      bind();
+    });
+  }
+
+  function bind(){
+    $("#tbl").off("click", ".detail").on("click", ".detail", function(){
+      openDetail($(this).attr("data-id"));
+    });
+    $("#tbl").off("click", ".teacher-link").on("click", ".teacher-link", function(e){
+      e.preventDefault();
+      openTeacher($(this).attr("data-id"));
+    });
+  }
+
+  /* ---------------------------------------------------- one form in full */
+  function questionBlock(q){
+    const total = q.options.reduce((n,o)=>n+o.count, 0) || 1;
+    return '<div class="col-12 col-lg-6"><div class="card h-100"><div class="card-body">'+
+      '<div class="fw-600 fs-14 mb-1">'+GA.esc(q.text)+'</div>'+
+      '<div class="fs-12 text-muted-2 mb-2">'+q.answered+' answered'+
+      (q.average == null ? '' : ' · '+q.average+'%')+
+      (q.bipolar ? ' · best in the middle' : '')+'</div>'+
+      q.options.map(function(o){
+        const pct = Math.round(o.count / total * 100);
+        return '<div class="mb-1"><div class="d-flex justify-content-between fs-13">'+
+          '<span>'+GA.esc(o.label)+'</span><span class="text-muted-2">'+o.count+'</span></div>'+
+          '<div class="progress" style="height:6px"><div class="progress-bar" '+
+          'style="width:'+pct+'%"></div></div></div>';
+      }).join("")+
+      '</div></div></div>';
+  }
+
+  function openDetail(id){
+    killCharts();
+    $("#d-body").html('<div class="text-center py-5"><div class="ga-spinner mx-auto"></div></div>');
+    new bootstrap.Modal("#detail-modal").show();
+    GA.get("/feedback/api/list/"+id+"/").done(function(res){
+      const d = res.data, f = d.form, s = d.stats;
+      $("#d-context").text(f.subject+" — "+f.subject_name+" · "+f.teacher+" · "+
+                           f.batch+" · "+f.date);
+      $("#d-body").html(
+        '<div class="row g-3 mb-3">'+
+          '<div class="col-6 col-md-3"><div class="card"><div class="card-body py-2">'+
+          '<div class="fw-bold fs-4 lh-1">'+s.responses+' / '+f.sent+'</div>'+
+          '<small class="text-muted-2">responded ('+f.response_rate+'%)</small></div></div></div>'+
+          '<div class="col-6 col-md-3"><div class="card"><div class="card-body py-2">'+
+          '<div>'+(s.average_rating == null ? '—' : GA.stars(s.average_rating))+'</div>'+
+          '<small class="text-muted-2">average rating</small></div></div></div>'+
+          '<div class="col-6 col-md-3"><div class="card"><div class="card-body py-2">'+
+          '<div class="fw-bold fs-4 lh-1">'+(s.score == null ? '—' : s.score+'%')+'</div>'+
+          '<small class="text-muted-2">overall score</small></div></div></div>'+
+          '<div class="col-6 col-md-3"><div class="card"><div class="card-body py-2">'+
+          '<canvas id="c-rating" height="70"></canvas></div></div></div>'+
+        '</div>'+
+        '<div class="card mb-3"><div class="card-body"><canvas id="c-questions" height="110"></canvas></div></div>'+
+        '<div class="row g-3">'+s.questions.map(questionBlock).join("")+'</div>'+
+        (d.revealed
+          ? '<h6 class="mt-4 mb-2">Individual responses</h6>'+
+            (d.rows.length ? d.rows.map(r =>
+              '<div class="border rounded-3 p-2 mb-2">'+
+              '<div class="d-flex justify-content-between align-items-center">'+
+              '<div>'+GA.stars(r.rating)+'</div>'+
+              '<small class="text-muted-2">'+(r.score == null ? '' : r.score+'%')+'</small></div>'+
+              (r.remarks ? '<div class="mt-1" style="white-space:pre-wrap">'+GA.esc(r.remarks)+'</div>' : '')+
+              '</div>').join("") : '')
+          : '<div class="alert alert-light border fs-13 mt-4 mb-0">'+
+            '<i class="fa-solid fa-user-shield text-primary me-2"></i>'+
+            'Individual answers and remarks stay hidden until <b>'+d.min_responses+
+            '</b> students have replied. In a small class a remark is effectively '+
+            'signed, and students answer honestly only if that cannot happen. '+
+            'The totals above cover every response received.</div>'));
+
+      charts.push(new Chart(document.getElementById("c-rating"), {
+        type:"bar",
+        data:{ labels:["1","2","3","4","5"],
+               datasets:[{ data:s.rating_spread, backgroundColor:"#f59e0b" }] },
+        options:{ plugins:{legend:{display:false}, title:{display:true, text:"Stars"}},
+                  scales:{y:{display:false}} }
+      }));
+      charts.push(new Chart(document.getElementById("c-questions"), {
+        type:"radar",
+        data:{
+          labels: s.questions.map(q => q.text.replace(/\?$/,"").slice(0, 28)),
+          datasets:[{ label:"Score %", data: s.questions.map(q => q.average || 0),
+                      borderColor:"#6366f1", backgroundColor:"rgba(99,102,241,.18)" }]
+        },
+        options:{ scales:{ r:{ min:0, max:100 } } }
+      }));
+    });
+  }
+
+  /* ------------------------------------------------- one teacher, overall */
+  function openTeacher(id){
+    killCharts();
+    $("#t-body").html('<div class="text-center py-5"><div class="ga-spinner mx-auto"></div></div>');
+    new bootstrap.Modal("#teacher-modal").show();
+    GA.get("/feedback/api/teachers/"+id+"/").done(function(res){
+      const d = res.data, s = d.stats;
+      $("#t-name").text(d.teacher);
+      $("#t-context").text(d.forms+" forms · "+s.responses+" responses in total");
+      $("#t-body").html(
+        '<div class="row g-3 mb-3">'+
+          '<div class="col-6 col-md-4"><div class="card"><div class="card-body py-2">'+
+          '<div>'+(s.average_rating == null ? '—' : GA.stars(s.average_rating))+'</div>'+
+          '<small class="text-muted-2">average rating</small></div></div></div>'+
+          '<div class="col-6 col-md-4"><div class="card"><div class="card-body py-2">'+
+          '<div class="fw-bold fs-4 lh-1">'+(s.score == null ? '—' : s.score+'%')+'</div>'+
+          '<small class="text-muted-2">overall score</small></div></div></div>'+
+          '<div class="col-12 col-md-4"><div class="card"><div class="card-body py-2">'+
+          '<canvas id="t-rating" height="70"></canvas></div></div></div>'+
+        '</div>'+
+        (d.trend.length > 1
+          ? '<div class="card mb-3"><div class="card-body"><canvas id="t-trend" height="90"></canvas></div></div>'
+          : '')+
+        '<div class="card mb-3"><div class="card-body"><canvas id="t-questions" height="110"></canvas></div></div>'+
+        '<div class="row g-3">'+s.questions.map(questionBlock).join("")+'</div>');
+
+      charts.push(new Chart(document.getElementById("t-rating"), {
+        type:"bar",
+        data:{ labels:["1","2","3","4","5"],
+               datasets:[{ data:s.rating_spread, backgroundColor:"#f59e0b" }] },
+        options:{ plugins:{legend:{display:false}, title:{display:true, text:"Stars"}},
+                  scales:{y:{display:false}} }
+      }));
+      if(d.trend.length > 1){
+        charts.push(new Chart(document.getElementById("t-trend"), {
+          type:"line",
+          data:{ labels: d.trend.map(t => t.date+" "+t.subject),
+                 datasets:[
+                   { label:"Overall %", data: d.trend.map(t => t.score),
+                     borderColor:"#6366f1", tension:.3 },
+                   { label:"Rating ×20", data: d.trend.map(t => (t.average_rating||0)*20),
+                     borderColor:"#f59e0b", tension:.3 }
+                 ] },
+          // Rating is multiplied by 20 so a 1–5 scale shares an axis with a
+          // 0–100 one. Labelled as such rather than silently rescaled.
+          options:{ scales:{ y:{ min:0, max:100 } } }
+        }));
+      }
+      charts.push(new Chart(document.getElementById("t-questions"), {
+        type:"radar",
+        data:{ labels: s.questions.map(q => q.text.replace(/\?$/,"").slice(0, 28)),
+               datasets:[{ label:"Score %", data: s.questions.map(q => q.average || 0),
+                           borderColor:"#6366f1", backgroundColor:"rgba(99,102,241,.18)" }] },
+        options:{ scales:{ r:{ min:0, max:100 } } }
+      }));
+    });
+  }
+
+  // A single day and a range are mutually exclusive on screen, so choosing one
+  // clears the other rather than leaving a filter that quietly does nothing.
+  $("#f-date").on("change", function(){ if(this.value){ $("#f-start,#f-end").val(""); } load(); });
+  $("#f-start,#f-end").on("change", function(){ if(this.value){ $("#f-date").val(""); } load(); });
+  $("#f-department,#f-teacher,#f-subject,#f-batch").on("change", load);
+  $("#btn-clear").on("click", function(){
+    $("#f-department,#f-teacher,#f-subject,#f-batch,#f-date,#f-start,#f-end").val("");
+    load();
+  });
+  $("#btn-refresh").on("click", function(){ GA.spin(this, load()); });
+  $("#detail-modal, #teacher-modal").on("hidden.bs.modal", killCharts);
+
+  load();
+});
+</script>
+{% endblock %}

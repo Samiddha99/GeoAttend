@@ -49,6 +49,11 @@
     <i class="fa-solid fa-calendar-check"></i> My attendance</a>
   <a href="{% url 'attendance:my_absence_reasons' %}" class="{% if '/attendance/my-reasons' in request.path %}active{% endif %}">
     <i class="fa-solid fa-comment-dots"></i> Absence reasons</a>
+  <a href="{% url 'feedback:my_feedback' %}" class="{% if '/feedback/my' in request.path %}active{% endif %}">
+    <i class="fa-solid fa-star-half-stroke"></i> Class feedback
+    {% if pending_feedback %}<span class="ga-nav-badge" id="ga-feedback-badge"
+      title="{{ pending_feedback }} waiting for you">{{ pending_feedback }}</span>
+    {% else %}<span class="ga-nav-badge d-none" id="ga-feedback-badge">0</span>{% endif %}</a>
   <a href="{% url 'academics:teachers' %}" class="{% if '/manage/teachers' in request.path %}active{% endif %}">
     <i class="fa-solid fa-chalkboard-user"></i> Teachers</a>
 {% else %}
@@ -64,6 +69,8 @@
     {% if pending_reviews %}<span class="ga-nav-badge" id="ga-review-badge"
       title="{{ pending_reviews }} awaiting your review">{{ pending_reviews }}</span>
     {% else %}<span class="ga-nav-badge d-none" id="ga-review-badge">0</span>{% endif %}</a>
+  <a href="{% url 'feedback:feedback' %}" class="{% if request.path == '/feedback/' %}active{% endif %}">
+    <i class="fa-solid fa-star-half-stroke"></i> Class feedback</a>
 {% endif %}
 
 <div class="nav-label">Account</div>

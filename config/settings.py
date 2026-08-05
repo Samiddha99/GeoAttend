@@ -79,6 +79,7 @@ INSTALLED_APPS = [
     "dashboard.apps.DashboardConfig",
     "notifications.apps.NotificationsConfig",
     "core.apps.CoreConfig",
+    "feedback.apps.FeedbackConfig",
     # Serves the face-matching WebSocket. No channel layer is configured
     # because none is needed: each socket talks only to itself, so there is
     # nothing to broadcast and no Redis to run.
@@ -348,6 +349,19 @@ ATTENDANCE = {
     # with no attachment is still a valid reason. 0 files turns it off.
     "ATTACHMENT_MAX_FILES": env_int("ABSENCE_ATTACHMENT_MAX_FILES", 5),
     "ATTACHMENT_MAX_TOTAL_MB": env_int("ABSENCE_ATTACHMENT_MAX_TOTAL_MB", 20),
+}
+
+# --------------------------------------------------------------------------- #
+#  Class feedback
+# --------------------------------------------------------------------------- #
+FEEDBACK = {
+    # How far back a teacher may reach when asking for feedback. Beyond this a
+    # student is being asked to rate a class they no longer remember.
+    "MAX_SESSION_AGE_DAYS": env_int("FEEDBACK_MAX_SESSION_AGE_DAYS", 360),
+    "OPEN_HOURS": env_int("FEEDBACK_OPEN_HOURS", 24),
+    # Individual answers and remarks stay hidden until this many students have
+    # replied. In a class of six, a remark is effectively signed.
+    "MIN_RESPONSES_TO_REVEAL": env_int("FEEDBACK_MIN_RESPONSES_TO_REVEAL", 5),
 }
 
 # --------------------------------------------------------------------------- #

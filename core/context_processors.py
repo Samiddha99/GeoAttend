@@ -10,7 +10,27 @@ def site(request):
         "ATT_CONF": settings.ATTENDANCE,
         "current_role": getattr(user, "role", None) if getattr(user, "is_authenticated", False) else None,
         "pending_reviews": pending_review_count(user),
+        "pending_feedback": pending_feedback_count(user),
     }
+
+
+def pending_feedback_count(user):
+    """
+    Feedback forms a student still owes, for the sidebar badge.
+
+    Expired forms are not counted: they cannot be answered, so listing them
+    would build a badge that never clears and that the student can do nothing
+    about.
+    """
+    if not getattr(user, "is_authenticated", False) or user.role != "STUDENT":
+        return 0
+    profile = getattr(user, "student_profile", None)
+    if profile is None:
+        return 0
+
+    from feedback.services import pending_count
+
+    return pending_count(profile)
 
 
 def pending_review_count(user):

@@ -98,7 +98,25 @@ def sessions_page(request):
 @ensure_csrf_cookie
 def session_detail_page(request, pk):
     session = get_object_or_404(_visible_sessions(request.user), pk=pk)
-    return render(request, "attendance/session_detail.html", {"session": session})
+    # Decided here rather than left to the endpoint to refuse. Offering a
+    # button whose only possible outcome is an error message is worse than
+    # not offering it: the teacher learns the rule by being told off.
+    window = int(settings.FEEDBACK.get("MAX_SESSION_AGE_DAYS", 10))
+    minimum = int(settings.FEEDBACK.get("MIN_RESPONSES_TO_REVEAL", 5))
+    age = (timezone.localdate() - session.session_date).days
+    present = session.present_count
+    return render(request, "attendance/session_detail.html", {
+        "session": session,
+        "feedback_window": window,
+        "feedback_age": age,
+        "feedback_min": minimum,
+        "feedback_present": present,
+        "feedback_sent": hasattr(session, "feedback_form"),
+        # Both rules, so the page never offers a button the endpoint will
+        # refuse. The endpoint still checks independently.
+        "can_request_feedback": 0 <= age <= window and present >= minimum,
+        "feedback_too_small": present < minimum,
+    })
 
 
 @role_required(TEACHER)

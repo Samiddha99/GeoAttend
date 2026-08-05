@@ -20,6 +20,7 @@ urlpatterns = [
     path("manage/", include("academics.urls")),
     path("attendance/", include("attendance.urls")),
     path("alerts/", include("notifications.urls")),
+    path("feedback/", include("feedback.urls")),
 ]
 
 if settings.DEBUG:

@@ -60,6 +60,49 @@
       </div>
     </div>
     {% endif %}
+
+    <!--
+      Asking for feedback is not tied to the link still being open: a teacher
+      usually thinks of it after the class, and the window for asking is ten
+      days rather than five minutes.
+    -->
+    <div class="card mt-3"><div class="card-body">
+      <div class="fw-600 mb-1"><i class="fa-solid fa-star-half-stroke me-1 text-primary"></i>Class feedback</div>
+      {% if feedback_sent %}
+        <p class="text-muted-2 fs-13 mb-2">A feedback form has already been sent for
+          this class. Answers appear under Class feedback as students reply.</p>
+        <a href="{% url 'feedback:feedback' %}" class="btn btn-light btn-sm w-100">
+          <i class="fa-solid fa-chart-column me-1"></i>See the responses</a>
+      {% elif can_request_feedback %}
+        <p class="text-muted-2 fs-13">Ask the students who attended how the class went.
+          The form stays open for 24 hours and answers reach you without names.</p>
+        <button class="btn btn-soft btn-sm w-100" id="btn-feedback">
+          <i class="fa-solid fa-paper-plane me-1"></i>Send feedback form</button>
+      {% elif feedback_too_small %}
+        <!--
+          Refused on size before age, because it is the more surprising rule
+          and the teacher should hear the real reason rather than a stale-class
+          message that happens to also be true.
+        -->
+        <p class="text-muted-2 fs-13 mb-0">
+          Only <b>{{ feedback_present }}</b> student{{ feedback_present|pluralize }}
+          attended. Feedback needs at least <b>{{ feedback_min }}</b> — below that,
+          a class is small enough that answers point back at the people who gave
+          them, whatever the screen says.
+        </p>
+      {% else %}
+        <!--
+          No button at all rather than a disabled one that explains itself on
+          click. The window has passed and nothing the teacher does here can
+          reopen it.
+        -->
+        <p class="text-muted-2 fs-13 mb-0">
+          This class was {{ feedback_age }} days ago. Feedback can only be
+          requested within <b>{{ feedback_window }} days</b>, while students
+          still remember the class well enough for the answers to mean anything.
+        </p>
+      {% endif %}
+    </div></div>
   </div>
 
   <div class="col-lg-8">
@@ -207,6 +250,32 @@ $(function(){
         });
     };
     if(action==="close") GA.confirm({title:"Close this attendance link?"}).done(run); else run();
+  });
+
+  // Top level, bound once. It previously ended up nested inside the
+  // [data-action] handler's callback, so it only came alive after someone
+  // clicked Close — and re-bound every time they did.
+  $("#btn-feedback").on("click", function(){
+    const $btn = $(this);
+    GA.confirm({title:"Ask this class for feedback?", variant:"success",
+      icon:"fa-star-half-stroke",
+      body:"Everyone marked present is asked. The form closes after 24 hours, "+
+           "and you see the answers without knowing who gave them.",
+      confirmText:"Send form"})
+      .done(function(){
+        GA.btnBusy($btn, true, "Sending…");
+        GA.post("/feedback/api/sessions/"+id+"/send/", {}, {quiet:true})
+          .done(function(res){
+            GA.toast(res.message, "ok");
+            $btn.prop("disabled", true)
+                .html('<i class="fa-solid fa-check me-1"></i>Feedback requested');
+          })
+          .fail(function(xhr){
+            const r = (xhr && xhr.responseJSON) || {};
+            GA.toast(r.message || "Could not send that.", "warn");
+            GA.btnBusy($btn, false);
+          });
+      });
   });
 
   $('[data-bs-target="#t3"]').on("shown.bs.tab", function(){
