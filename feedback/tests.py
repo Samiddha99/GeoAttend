@@ -166,6 +166,59 @@ class ScoringTests(SimpleTestCase):
         self.assertEqual(question["average"], 100.0)   # only the scored one
 
 
+class HeadlineTotalTests(SimpleTestCase):
+    """The four cards above the table."""
+
+    class _Reply:
+        def __init__(self, rating, score):
+            self.rating, self.score = rating, score
+
+    class _Form:
+        """Only what totals_for touches: `.responses.all()`."""
+
+        def __init__(self, replies):
+            self.responses = type("_Rel", (), {"all": staticmethod(lambda: replies)})
+
+    def _form(self, count, rating, score):
+        return self._Form([self._Reply(rating, score) for _ in range(count)])
+
+    def test_a_big_class_counts_for_more_than_a_small_one(self):
+        """
+        Averaging each form's own average would let three delighted students
+        cancel out sixty lukewarm ones. The card sits beside a count of
+        responses, so it has to be the average of those responses.
+        """
+        totals = svc.totals_for([self._form(3, 5, 1.0), self._form(60, 3, 0.5)])
+        self.assertEqual(totals["responses"], 63)
+        self.assertEqual(totals["average_rating"], 3.1)     # not 4.0
+        self.assertEqual(totals["score"], 52.4)             # not 75.0
+
+    def test_score_is_a_percentage_separate_from_the_star_rating(self):
+        totals = svc.totals_for([self._form(4, 5, 0.5)])
+        self.assertEqual(totals["average_rating"], 5.0)
+        self.assertEqual(totals["score"], 50.0)
+
+    def test_nothing_answered_reports_nothing_rather_than_zero(self):
+        """A blank card and a card reading 0% say opposite things."""
+        totals = svc.totals_for([self._form(0, 0, None)])
+        self.assertEqual(totals["forms"], 1)
+        self.assertEqual(totals["responses"], 0)
+        self.assertIsNone(totals["average_rating"])
+        self.assertIsNone(totals["score"])
+
+    def test_an_unscorable_reply_still_counts_as_a_reply(self):
+        """
+        Someone who only picked "board not used" has no score, but they did
+        answer — dropping them would make the response count disagree with the
+        table underneath.
+        """
+        totals = svc.totals_for([self._Form([self._Reply(4, None),
+                                             self._Reply(2, 0.5)])])
+        self.assertEqual(totals["responses"], 2)
+        self.assertEqual(totals["average_rating"], 3.0)
+        self.assertEqual(totals["score"], 50.0)
+
+
 class SendRuleTests(TestCase):
     def setUp(self):
         from academics.models import Batch, Department, Enrollment, StudentProfile, Subject
@@ -381,6 +434,91 @@ class SendRuleTests(TestCase):
         with override_settings(FEEDBACK=conf):
             self.assertTrue(svc.staff_detail(form)["revealed"])
 
+    # ------------------------------------------------------------ rollups
+    def test_each_grouping_rolls_the_same_responses_up_differently(self):
+        self._fill(5)
+        forms = list(svc.visible_forms(self.teacher).prefetch_related("responses"))
+        for kind in svc.GROUPINGS:
+            with self.subTest(kind=kind):
+                rows = svc.group_rows(forms, kind)
+                self.assertEqual(len(rows), 1)          # one class, one of each
+                self.assertEqual(rows[0]["forms"], 1)
+                self.assertEqual(rows[0]["responses"], 5)
+                self.assertEqual(rows[0]["sent"], 5)
+                self.assertEqual(rows[0]["response_rate"], 100.0)
+
+    def test_rollup_rows_are_worst_first(self):
+        """
+        A list of teaching feedback is read to find what needs attention.
+        Sorting best-first buries exactly what someone opened it to see.
+        """
+        rows = [{"score": 80.0}, {"score": None}, {"score": 20.0}, {"score": 55.0}]
+        rows.sort(key=lambda r: (r["score"] is None, r["score"] or 0))
+        self.assertEqual([r["score"] for r in rows], [20.0, 55.0, 80.0, None])
+
+    def test_a_group_detail_names_the_group_and_nobody_else(self):
+        self._fill(5)
+        forms = list(svc.visible_forms(self.teacher).prefetch_related("responses"))
+        detail = svc.group_detail(forms, "teachers", self.teacher.id)
+        self.assertEqual(detail["label"], "Teacher")
+        self.assertEqual(detail["forms"], 1)
+        self.assertEqual(detail["stats"]["responses"], 5)
+
+    def test_an_unknown_grouping_yields_nothing_rather_than_guessing(self):
+        self._fill(5)
+        forms = list(svc.visible_forms(self.teacher).prefetch_related("responses"))
+        detail = svc.group_detail(forms, "teachers", "does-not-exist")
+        self.assertEqual(detail["forms"], 0)
+        self.assertEqual(detail["stats"]["responses"], 0)
+
+    # ------------------------------------------------------------ remarks
+    def test_every_remark_is_shown_on_a_form_that_reached_the_threshold(self):
+        form = self._fill(5)
+        detail = svc.staff_detail(form)
+        self.assertEqual(len(detail["remarks"]), 5)
+        self.assertEqual(detail["remarks_withheld"], 0)
+        self.assertEqual(detail["remarks"][0]["text"], "Good class")
+
+    def test_remarks_from_a_thin_response_are_counted_but_withheld(self):
+        """
+        The risk of a remark being attributed is set by the class it came from,
+        not by the size of the pool it is later aggregated into.
+        """
+        form = self._fill(3)
+        detail = svc.staff_detail(form)
+        self.assertEqual(detail["remarks"], [])
+        self.assertEqual(detail["remarks_withheld"], 3)
+
+    def test_a_rollup_gathers_remarks_across_its_forms(self):
+        self._fill(5)
+        forms = list(svc.visible_forms(self.teacher).prefetch_related("responses"))
+        for kind in ("teachers", "subjects", "departments"):
+            with self.subTest(kind=kind):
+                detail = svc.group_detail(forms, kind, svc.GROUPINGS[kind]["key"](forms[0]))
+                self.assertEqual(len(detail["remarks"]), 5)
+                # Each carries its own context, because a rollup spans classes.
+                self.assertIn("subject", detail["remarks"][0])
+                self.assertIn("teacher", detail["remarks"][0])
+
+    def test_a_thin_form_does_not_get_pooled_into_a_bigger_one(self):
+        """
+        Pooling a 2-response class into a teacher's 200 would hide the
+        arithmetic, not the author.
+        """
+        thin = self._fill(3)
+        forms = list(svc.visible_forms(self.teacher).prefetch_related("responses"))
+        detail = svc.group_detail(forms, "teachers", self.teacher.id)
+        self.assertEqual(detail["remarks"], [])
+        self.assertEqual(detail["remarks_withheld"], 3)
+
+    def test_an_empty_remark_is_not_a_remark(self):
+        form = svc.send_form(session=self.session, actor=self.teacher)
+        for i, profile in enumerate(self.students[:5]):
+            svc.submit(form=form, student=profile, raw_answers=self._answers(),
+                       rating=4, remarks="   " if i else "Worth reading")
+        detail = svc.staff_detail(form)
+        self.assertEqual(len(detail["remarks"]), 1)
+
     def test_no_staff_payload_can_identify_a_respondent(self):
         """
         The guarantee, checked rather than asserted in a docstring. Answers are
@@ -392,11 +530,18 @@ class SendRuleTests(TestCase):
         user_emails = {s.user.email for s in self.students}
         rolls = {s.class_roll for s in self.students}
 
+        forms = list(svc.visible_forms(self.teacher).prefetch_related("responses"))
         payloads = [
             svc.staff_form_row(form),
             svc.staff_detail(form),
             svc.teacher_summary(self.teacher, self.teacher),
         ]
+        # Every rollup as well: a new grouping is exactly the kind of addition
+        # that would quietly carry a student field along with it.
+        for kind in svc.GROUPINGS:
+            payloads.append(svc.group_rows(forms, kind))
+            for row in svc.group_rows(forms, kind):
+                payloads.append(svc.group_detail(forms, kind, row["id"]))
 
         def walk(node, path="root"):
             if isinstance(node, dict):

@@ -5,6 +5,7 @@ Split by audience rather than by resource: the student endpoints and the staff
 endpoints read the same tables but must never return the same shape, and
 keeping them apart in the file is the cheapest way to keep that true.
 """
+from django.http import Http404
 from django.shortcuts import get_object_or_404, render
 from django.utils import timezone
 from django.views.decorators.csrf import ensure_csrf_cookie
@@ -129,44 +130,11 @@ def feedback_page(request):
 @role_required(TEACHER, HOD, HEAD)
 @require_GET
 def api_forms(request):
-    qs = svc.visible_forms(request.user).prefetch_related("responses")
-
-    subject = clean_object_id(request.GET.get("subject"))
-    teacher = clean_object_id(request.GET.get("teacher"))
-    batch = clean_object_id(request.GET.get("batch"))
-    department = clean_object_id(request.GET.get("department"))
-    if subject:
-        qs = qs.filter(session__subject_id=subject)
-    if teacher:
-        qs = qs.filter(session__teacher_id=teacher)
-    if batch:
-        qs = qs.filter(session__batch_id=batch)
-    if department:
-        qs = qs.filter(session__subject__department_id=department)
-
-    # A single date and a range are the same filter with the ends collapsed —
-    # one control on screen, one code path here.
-    on = parse_date(request.GET.get("date"))
-    start = parse_date(request.GET.get("start"))
-    end = parse_date(request.GET.get("end"))
-    if on:
-        qs = qs.filter(session__session_date=on)
-    else:
-        if start:
-            qs = qs.filter(session__session_date__gte=start)
-        if end:
-            qs = qs.filter(session__session_date__lte=end)
-
-    rows = [svc.staff_form_row(f) for f in qs[:500]]
-    answered = [r for r in rows if r["responses"]]
+    """One row per class."""
+    forms = list(svc.filtered_forms(request.user, request.GET)[:500])
     return ok({
-        "rows": rows,
-        "totals": {
-            "forms": len(rows),
-            "responses": sum(r["responses"] for r in rows),
-            "average_rating": (round(sum(r["average_rating"] for r in answered)
-                                     / len(answered), 2) if answered else None),
-        },
+        "rows": [svc.staff_form_row(f) for f in forms],
+        "totals": svc.totals_for(forms),
     })
 
 
@@ -180,6 +148,33 @@ def api_form_detail(request, pk):
 
 @role_required(TEACHER, HOD, HEAD)
 @require_GET
-def api_teacher_summary(request, pk):
-    teacher = get_object_or_404(visible_teachers_for(request.user), pk=pk)
-    return ok(svc.teacher_summary(request.user, teacher))
+def api_groups(request, kind):
+    """
+    The same forms rolled up by teacher, subject, department or batch.
+
+    Grouped in Python rather than by the database: the filtered set is already
+    loaded with its responses, and the scoring rules that turn answers into a
+    number live in Python anyway — an aggregate query would have to duplicate
+    them and could not stay in step.
+    """
+    if kind not in svc.GROUPINGS:
+        raise Http404
+    forms = list(svc.filtered_forms(request.user, request.GET)[:1000])
+    rows = svc.group_rows(forms, kind)
+    return ok({
+        "rows": rows,
+        "label": svc.GROUPINGS[kind]["label"],
+        # `groups` is the only figure the rollup adds; the rest are the same
+        # responses counted the same way as on the Classes tab, so switching
+        # tabs never makes the headline numbers move.
+        "totals": dict(svc.totals_for(forms), groups=len(rows)),
+    })
+
+
+@role_required(TEACHER, HOD, HEAD)
+@require_GET
+def api_group_detail(request, kind, pk):
+    if kind not in svc.GROUPINGS:
+        raise Http404
+    forms = list(svc.filtered_forms(request.user, request.GET)[:1000])
+    return ok(svc.group_detail(forms, kind, pk))

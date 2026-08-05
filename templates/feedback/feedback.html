@@ -4,6 +4,25 @@
 without any way to tell who gave them.{% endblock %}
 
 {% block content %}
+<!--
+  One filter bar above the tabs, not one per tab. Every tab reads the same
+  forms rolled up differently, so a filter means the same thing in all four —
+  and narrowing to a department then switching to Teachers should keep the
+  narrowing rather than silently resetting it.
+-->
+<ul class="nav nav-tabs mb-3" id="scope-tabs">
+  <li class="nav-item"><button class="nav-link active" data-scope="classes">
+    <i class="fa-solid fa-chalkboard me-1"></i>Classes</button></li>
+  <li class="nav-item"><button class="nav-link" data-scope="teachers">
+    <i class="fa-solid fa-user-tie me-1"></i>Teachers</button></li>
+  <li class="nav-item"><button class="nav-link" data-scope="subjects">
+    <i class="fa-solid fa-book me-1"></i>Subjects</button></li>
+  <li class="nav-item"><button class="nav-link" data-scope="departments">
+    <i class="fa-solid fa-building-columns me-1"></i>Departments</button></li>
+  <li class="nav-item"><button class="nav-link" data-scope="batches">
+    <i class="fa-solid fa-users me-1"></i>Batches</button></li>
+</ul>
+
 <div class="card mb-3"><div class="card-body py-3 table-toolbar">
   <select class="form-select form-select-sm" id="f-department" style="max-width:190px">
     <option value="">All departments</option>
@@ -34,7 +53,10 @@ without any way to tell who gave them.{% endblock %}
 
 <div class="row g-3 mb-3" id="totals"></div>
 
-<div class="card"><div class="card-body"><div id="tbl"></div></div></div>
+<div class="card"><div class="card-body">
+  <div id="tbl"></div>
+  <div id="tbl-group"></div>
+</div></div>
 
 <!-- one form in full -->
 <div class="modal fade" id="detail-modal" tabindex="-1">
@@ -82,7 +104,8 @@ without any way to tell who gave them.{% endblock %}
 <script>
 $(function(){
   const MIN_RESPONSES = {{ min_responses }};
-  let table = null, rows = [], charts = [];
+  let table = null, groupTable = null, rows = [], charts = [];
+  let scope = "classes";
 
   function killCharts(){ charts.forEach(c => c.destroy()); charts = []; }
 
@@ -107,6 +130,27 @@ $(function(){
       '<i class="fa-solid fa-chevron-right"></i></button>' }
   ];
 
+  // Deliberately the same shape as the class columns, so moving between tabs
+  // does not mean relearning the table.
+  const groupCols = (label) => [
+    { key:"name", label:label, render:(v,r)=>
+      '<div class="fw-600">'+GA.esc(v)+'</div>'+
+      (r.extra ? '<small class="text-muted-2">'+GA.esc(r.extra)+'</small>' : '') },
+    { key:"forms", label:"Forms", className:"text-center" },
+    { key:"responses", label:"Responses", className:"text-center", render:(v,r)=>
+      '<div class="fw-600">'+v+' / '+r.sent+'</div>'+
+      '<small class="text-muted-2">'+r.response_rate+'%</small>' },
+    { key:"average_rating", label:"Rating", width:"160px", render:v=> v == null
+        ? '<span class="text-muted-2">—</span>' : GA.stars(v) },
+    { key:"score", label:"Overall", width:"140px", render:v=> v == null
+        ? '<span class="text-muted-2">—</span>' : GA.bar(v) },
+    { key:"last", label:"Latest", value:r=>r.last_iso, csv:(v,r)=>r.last,
+      render:(v,r)=>GA.esc(r.last) },
+    { key:"id", label:"", sortable:false, className:"text-end", render:(v,r)=>
+      '<button class="btn btn-light btn-sm group-detail" data-id="'+v+'">'+
+      '<i class="fa-solid fa-chevron-right"></i></button>' }
+  ];
+
   function filters(){
     return GA.query({
       department: $("#f-department").val(), teacher: $("#f-teacher").val(),
@@ -116,21 +160,68 @@ $(function(){
   }
 
   function load(){
+    return scope === "classes" ? loadClasses() : loadGroups();
+  }
+
+  // Score is a percentage over the choice questions; rating is out of five.
+  // Kept as two cards rather than one because they can disagree — a class can
+  // be rated warmly and still answer the specific questions poorly — and that
+  // disagreement is the interesting part.
+  const scoreCard = t => ["Average score",
+    t.score == null ? "—" : t.score.toFixed(1) + "%", "fa-percent", "bg-grad-4"];
+
+  function totalsHtml(cards){
+    // Four across on a wide screen, five when the rollup adds its own count.
+    const width = cards.length > 4 ? "col-6 col-md-4 col-xl" : "col-6 col-md-3";
+    return cards.map(x =>
+      '<div class="'+width+'"><div class="card h-100"><div class="card-body d-flex align-items-center gap-3">'+
+      '<div class="icon '+x[3]+'" style="width:42px;height:42px;border-radius:11px;display:grid;place-items:center;color:#fff">'+
+      '<i class="fa-solid '+x[2]+'"></i></div><div><div class="fw-bold fs-4 lh-1">'+x[1]+'</div>'+
+      '<small class="text-muted-2">'+x[0]+'</small></div></div></div></div>').join("");
+  }
+
+  function loadGroups(){
+    $("#tbl").addClass("d-none");
+    $("#tbl-group").removeClass("d-none");
+    GA.loading("#tbl-group", {rows:8, cols:7});
+    GA.loading("#totals", {kind:"stat"});
+    return GA.get("/feedback/api/groups/"+scope+"/", filters()).done(function(res){
+      const d = res.data, t = d.totals;
+      $("#totals").html(totalsHtml([
+        [d.label + "s", t.groups, "fa-layer-group", "bg-grad-2"],
+        ["Forms", t.forms, "fa-clipboard-list", "bg-grad-1"],
+        ["Responses", t.responses, "fa-comments", "bg-grad-3"],
+        ["Average rating", t.average_rating == null ? "—" : t.average_rating.toFixed(2),
+         "fa-star", "bg-grad-5"],
+        scoreCard(t),
+      ]));
+      GA.done("#totals");
+      // Rebuilt rather than reused: the first column means something different
+      // in each tab, and a table cannot change its own columns.
+      groupTable = GA.table("#tbl-group", {
+        csvName:"feedback-by-"+scope, columns:groupCols(d.label), rows:d.rows,
+        perPage:15, empty:"No feedback matches these filters."});
+      $("#tbl-group").off("click", ".group-detail").on("click", ".group-detail", function(){
+        openGroup($(this).attr("data-id"));
+      });
+    });
+  }
+
+  function loadClasses(){
+    $("#tbl-group").addClass("d-none");
+    $("#tbl").removeClass("d-none");
     GA.loading("#tbl", {rows:8, cols:7});
     GA.loading("#totals", {kind:"stat"});
     return GA.get("{% url 'feedback:api_forms' %}", filters()).done(function(res){
       rows = res.data.rows;
       const t = res.data.totals;
-      $("#totals").html([
+      $("#totals").html(totalsHtml([
         ["Forms", t.forms, "fa-clipboard-list", "bg-grad-1"],
         ["Responses", t.responses, "fa-comments", "bg-grad-3"],
         ["Average rating", t.average_rating == null ? "—" : t.average_rating.toFixed(2),
          "fa-star", "bg-grad-5"],
-      ].map(x =>
-        '<div class="col-6 col-md-4"><div class="card"><div class="card-body d-flex align-items-center gap-3">'+
-        '<div class="icon '+x[3]+'" style="width:42px;height:42px;border-radius:11px;display:grid;place-items:center;color:#fff">'+
-        '<i class="fa-solid '+x[2]+'"></i></div><div><div class="fw-bold fs-4 lh-1">'+x[1]+'</div>'+
-        '<small class="text-muted-2">'+x[0]+'</small></div></div></div></div>').join(""));
+        scoreCard(t),
+      ]));
       GA.done("#totals");
 
       if(!table) table = GA.table("#tbl", {csvName:"class-feedback", columns:cols, rows:rows,
@@ -151,6 +242,56 @@ $(function(){
   }
 
   /* ---------------------------------------------------- one form in full */
+  /**
+   * Every written remark, newest first.
+   *
+   * Its own tab rather than a strip at the bottom of the analytics: remarks
+   * are read differently from numbers — one at a time, looking for something
+   * specific — and burying them under six charts means most are never read.
+   */
+  function remarksHtml(list, withheld, showContext){
+    let html = '';
+    if(withheld){
+      html += '<div class="alert alert-light border fs-13">'+
+        '<i class="fa-solid fa-user-shield text-primary me-2"></i>'+
+        withheld+' remark'+(withheld === 1 ? '' : 's')+' held back, from classes '+
+        'where fewer than '+MIN_RESPONSES+' students replied. Too few answers and '+
+        'a remark points back at whoever wrote it.</div>';
+    }
+    if(!list.length){
+      return html + '<div class="ga-empty py-5"><i class="fa-solid fa-comment-slash"></i>'+
+        (withheld ? 'No remarks that can be shown.' : 'Nobody wrote a remark.')+'</div>';
+    }
+    return html + list.map(function(r){
+      return '<div class="border rounded-3 p-3 mb-2">'+
+        '<div class="d-flex justify-content-between align-items-start gap-2 mb-1">'+
+        '<div>'+GA.stars(r.rating)+'</div>'+
+        '<small class="text-muted-2 text-end">'+
+        (showContext
+          ? GA.esc(r.subject)+' · '+GA.esc(r.teacher)+'<br>'+GA.esc(r.date)
+          : GA.esc(r.date))+
+        '</small></div>'+
+        '<div style="white-space:pre-wrap">'+GA.esc(r.text)+'</div>'+
+        (r.score == null ? '' :
+          '<small class="text-muted-2">Answers scored '+r.score+'%</small>')+
+        '</div>';
+    }).join("");
+  }
+
+  /** Overview / Remarks, with the count on the tab so it is worth opening. */
+  function tabsHtml(id, overview, remarks, count){
+    return '<ul class="nav nav-pills mb-3">'+
+      '<li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" '+
+      'data-bs-target="#'+id+'-overview"><i class="fa-solid fa-chart-simple me-1"></i>'+
+      'Overview</button></li>'+
+      '<li class="nav-item"><button class="nav-link" data-bs-toggle="tab" '+
+      'data-bs-target="#'+id+'-remarks"><i class="fa-solid fa-comment-dots me-1"></i>'+
+      'Remarks <span class="ga-pill pill-blue ms-1">'+count+'</span></button></li>'+
+      '</ul><div class="tab-content">'+
+      '<div class="tab-pane fade show active" id="'+id+'-overview">'+overview+'</div>'+
+      '<div class="tab-pane fade" id="'+id+'-remarks">'+remarks+'</div></div>';
+  }
+
   function questionBlock(q){
     const total = q.options.reduce((n,o)=>n+o.count, 0) || 1;
     return '<div class="col-12 col-lg-6"><div class="card h-100"><div class="card-body">'+
@@ -176,7 +317,7 @@ $(function(){
       const d = res.data, f = d.form, s = d.stats;
       $("#d-context").text(f.subject+" — "+f.subject_name+" · "+f.teacher+" · "+
                            f.batch+" · "+f.date);
-      $("#d-body").html(
+      $("#d-body").html(tabsHtml("d",
         '<div class="row g-3 mb-3">'+
           '<div class="col-6 col-md-3"><div class="card"><div class="card-body py-2">'+
           '<div class="fw-bold fs-4 lh-1">'+s.responses+' / '+f.sent+'</div>'+
@@ -206,7 +347,11 @@ $(function(){
             'Individual answers and remarks stay hidden until <b>'+d.min_responses+
             '</b> students have replied. In a small class a remark is effectively '+
             'signed, and students answer honestly only if that cannot happen. '+
-            'The totals above cover every response received.</div>'));
+            'The totals above cover every response received.</div>'),
+        // One class, so every remark shares its subject and teacher — repeating
+        // them on each card would be noise.
+        remarksHtml(d.remarks, d.remarks_withheld, false),
+        d.remarks.length));
 
       charts.push(new Chart(document.getElementById("c-rating"), {
         type:"bar",
@@ -227,16 +372,22 @@ $(function(){
     });
   }
 
-  /* ------------------------------------------------- one teacher, overall */
-  function openTeacher(id){
+  /* --------------------------------- one teacher, subject, department… */
+  function openTeacher(id){ openGroup(id, "teachers"); }
+
+  function openGroup(id, kind){
+    kind = kind || scope;
     killCharts();
     $("#t-body").html('<div class="text-center py-5"><div class="ga-spinner mx-auto"></div></div>');
     new bootstrap.Modal("#teacher-modal").show();
-    GA.get("/feedback/api/teachers/"+id+"/").done(function(res){
+    // The filters go with it: a department's numbers should mean the same
+    // thing in the modal as they did in the row that was clicked.
+    GA.get("/feedback/api/groups/"+kind+"/"+id+"/", filters()).done(function(res){
       const d = res.data, s = d.stats;
-      $("#t-name").text(d.teacher);
-      $("#t-context").text(d.forms+" forms · "+s.responses+" responses in total");
-      $("#t-body").html(
+      $("#t-name").text(d.name);
+      $("#t-context").text(d.label+" · "+d.forms+" forms · "+s.responses+
+                           " responses in total");
+      $("#t-body").html(tabsHtml("t",
         '<div class="row g-3 mb-3">'+
           '<div class="col-6 col-md-4"><div class="card"><div class="card-body py-2">'+
           '<div>'+(s.average_rating == null ? '—' : GA.stars(s.average_rating))+'</div>'+
@@ -251,7 +402,10 @@ $(function(){
           ? '<div class="card mb-3"><div class="card-body"><canvas id="t-trend" height="90"></canvas></div></div>'
           : '')+
         '<div class="card mb-3"><div class="card-body"><canvas id="t-questions" height="110"></canvas></div></div>'+
-        '<div class="row g-3">'+s.questions.map(questionBlock).join("")+'</div>');
+        '<div class="row g-3">'+s.questions.map(questionBlock).join("")+'</div>',
+        // Across many classes, so each remark says which one it came from.
+        remarksHtml(d.remarks, d.remarks_withheld, true),
+        d.remarks.length));
 
       charts.push(new Chart(document.getElementById("t-rating"), {
         type:"bar",
@@ -263,7 +417,7 @@ $(function(){
       if(d.trend.length > 1){
         charts.push(new Chart(document.getElementById("t-trend"), {
           type:"line",
-          data:{ labels: d.trend.map(t => t.date+" "+t.subject),
+          data:{ labels: d.trend.map(t => t.date+" "+t.label),
                  datasets:[
                    { label:"Overall %", data: d.trend.map(t => t.score),
                      borderColor:"#6366f1", tension:.3 },
@@ -294,6 +448,16 @@ $(function(){
     $("#f-department,#f-teacher,#f-subject,#f-batch,#f-date,#f-start,#f-end").val("");
     load();
   });
+  $("#scope-tabs").on("click", "[data-scope]", function(){
+    $("#scope-tabs .nav-link").removeClass("active");
+    $(this).addClass("active");
+    scope = $(this).data("scope");
+    // A fresh table each time: the first column means something different in
+    // every tab, and GA.table cannot change its own columns.
+    groupTable = null;
+    load();
+  });
+
   $("#btn-refresh").on("click", function(){ GA.spin(this, load()); });
   $("#detail-modal, #teacher-modal").on("hidden.bs.modal", killCharts);
 

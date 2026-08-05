@@ -292,6 +292,72 @@ def summarise(responses):
     }
 
 
+def totals_for(forms):
+    """
+    The headline numbers above the table: forms, replies, rating and score.
+
+    Counted over every response in the set, not by averaging each form's own
+    average. Those two disagree whenever classes differ in size — a three-reply
+    class would otherwise weigh as heavily as a sixty-reply one — and the card
+    sits beside a count of responses, so it should be the average of those.
+
+    Deliberately lighter than `summarise()`: this needs two numbers, and doing
+    the per-question tally over a thousand forms to reach them is work nobody
+    reads.
+    """
+    ratings, scores = [], []
+    for form in forms:
+        for response in form.responses.all():
+            if response.rating:
+                ratings.append(response.rating)
+            score = response.score
+            if score is not None:
+                scores.append(score)
+    return {
+        "forms": len(forms),
+        "responses": sum(len(f.responses.all()) for f in forms),
+        "average_rating": round(sum(ratings) / len(ratings), 2) if ratings else None,
+        "score": round(sum(scores) / len(scores) * 100, 1) if scores else None,
+    }
+
+
+def remarks_from(forms):
+    """
+    Every written remark across a set of forms, newest first.
+
+    Gathered per form and only from forms that reached the reveal threshold —
+    the risk of a remark being attributed is set by the class it came from, not
+    by the size of the pool it is later aggregated into. Pooling a 2-response
+    class into a teacher's 200 would hide the arithmetic, not the author.
+
+    Returns (remarks, withheld) so the screen can say how many are missing
+    rather than quietly showing fewer than exist.
+    """
+    threshold = min_responses()
+    remarks, withheld = [], 0
+    for form in forms:
+        responses = list(form.responses.all())
+        written = [r for r in responses if (r.remarks or "").strip()]
+        if len(responses) < threshold:
+            withheld += len(written)
+            continue
+        for response in written:
+            remarks.append({
+                "text": response.remarks,
+                "rating": response.rating,
+                "score": (round(response.score * 100, 1)
+                          if response.score is not None else None),
+                "date": form.session.session_date.strftime("%d %b %Y"),
+                "date_iso": form.session.session_date.isoformat(),
+                "subject": form.session.subject.code,
+                "teacher": (form.session.teacher.full_name
+                            or form.session.teacher.email),
+                "batch": form.session.batch.label,
+            })
+    remarks.sort(key=lambda r: r["date_iso"], reverse=True)
+    return remarks, withheld
+
+
 def staff_form_row(form, *, responses=None):
     """A form in the staff list. Deliberately carries no respondent data."""
     session = form.session
@@ -334,6 +400,7 @@ def staff_detail(form):
     stats = summarise(responses)
     threshold = min_responses()
     revealed = len(responses) >= threshold
+    remarks = remarks_from([form])
 
     return {
         "form": staff_form_row(form, responses=responses),
@@ -349,6 +416,159 @@ def staff_detail(form):
             "score": round(r.score * 100, 1) if r.score is not None else None,
             "answers": r.answers,
         } for r in sorted(responses, key=lambda r: r.submitted_at)] if revealed else [],
+        # Split out from `rows` so the remarks tab has one shape to render
+        # whether it is showing a class, a teacher or a subject.
+        "remarks": remarks[0],
+        "remarks_withheld": remarks[1],
+    }
+
+
+# --------------------------------------------------------------------------- #
+#  Rolling the same responses up different ways
+# --------------------------------------------------------------------------- #
+#
+# One description per grouping rather than three near-identical functions. The
+# only things that actually differ are which field identifies the group and
+# what to call it on screen; everything else — filtering, summarising, the
+# per-form trend — is the same work, and three copies of it would drift.
+GROUPINGS = {
+    "teachers": {
+        "label": "Teacher",
+        "key": lambda form: form.session.teacher_id,
+        "name": lambda form: (form.session.teacher.full_name
+                              or form.session.teacher.email),
+        "extra": lambda form: form.session.subject.department.name,
+    },
+    "subjects": {
+        "label": "Subject",
+        "key": lambda form: form.session.subject_id,
+        "name": lambda form: (f"{form.session.subject.code} — "
+                              f"{form.session.subject.name}"),
+        "extra": lambda form: form.session.subject.department.name,
+    },
+    "departments": {
+        "label": "Department",
+        "key": lambda form: form.session.subject.department_id,
+        "name": lambda form: form.session.subject.department.name,
+        "extra": lambda form: "",
+    },
+    "batches": {
+        "label": "Batch",
+        "key": lambda form: form.session.batch_id,
+        "name": lambda form: form.session.batch.label,
+        "extra": lambda form: form.session.batch.department.name,
+    },
+}
+
+
+def filtered_forms(user, params):
+    """
+    The forms this person may see, narrowed by the filter bar.
+
+    Shared by every tab so a filter means the same thing wherever it is
+    applied — and so a new filter has one place to be added rather than four.
+    """
+    from core.utils import clean_object_id, parse_date
+
+    qs = visible_forms(user).prefetch_related("responses")
+    for field, param in (("session__subject_id", "subject"),
+                         ("session__teacher_id", "teacher"),
+                         ("session__batch_id", "batch"),
+                         ("session__subject__department_id", "department")):
+        value = clean_object_id(params.get(param))
+        if value:
+            qs = qs.filter(**{field: value})
+
+    # A single date and a range are the same filter with the ends collapsed.
+    on = parse_date(params.get("date"))
+    if on:
+        return qs.filter(session__session_date=on)
+    start, end = parse_date(params.get("start")), parse_date(params.get("end"))
+    if start:
+        qs = qs.filter(session__session_date__gte=start)
+    if end:
+        qs = qs.filter(session__session_date__lte=end)
+    return qs
+
+
+def group_rows(forms, kind):
+    """One row per teacher, subject, department or batch."""
+    spec = GROUPINGS[kind]
+    buckets = {}
+    for form in forms:
+        key = spec["key"](form)
+        bucket = buckets.setdefault(key, {
+            "id": key,
+            "name": spec["name"](form),
+            "extra": spec["extra"](form),
+            "forms": 0,
+            "sent": 0,
+            "responses": [],
+            "last": form.session.session_date,
+        })
+        bucket["forms"] += 1
+        bucket["sent"] += form.sent_count
+        bucket["responses"].extend(form.responses.all())
+        bucket["last"] = max(bucket["last"], form.session.session_date)
+
+    rows = []
+    for bucket in buckets.values():
+        stats = summarise(bucket["responses"])
+        rows.append({
+            "id": bucket["id"],
+            "name": bucket["name"],
+            "extra": bucket["extra"],
+            "forms": bucket["forms"],
+            "sent": bucket["sent"],
+            "responses": stats["responses"],
+            "response_rate": (round(stats["responses"] * 100.0 / bucket["sent"], 1)
+                              if bucket["sent"] else 0),
+            "average_rating": stats["average_rating"],
+            "score": stats["score"],
+            "last": bucket["last"].strftime("%d %b %Y"),
+            "last_iso": bucket["last"].isoformat(),
+        })
+    # Worst first: a list of teaching feedback is read to find what needs
+    # attention, and burying that under the best scores helps nobody.
+    rows.sort(key=lambda r: (r["score"] is None, r["score"] or 0))
+    return rows
+
+
+def group_detail(forms, kind, pk):
+    """
+    Everything one group's feedback says, with a trend across its forms.
+
+    Carries no respondent data, like every other staff payload here.
+    """
+    spec = GROUPINGS[kind]
+    mine = [f for f in forms if str(spec["key"](f)) == str(pk)]
+    responses = [r for f in mine for r in f.responses.all()]
+
+    trend = []
+    for form in sorted(mine, key=lambda f: f.session.session_date):
+        group = list(form.responses.all())
+        if not group:
+            continue
+        stats = summarise(group)
+        trend.append({
+            "date": form.session.session_date.strftime("%d %b"),
+            "label": form.session.subject.code,
+            "responses": stats["responses"],
+            "average_rating": stats["average_rating"],
+            "score": stats["score"],
+        })
+
+    written, withheld = remarks_from(mine)
+    return {
+        "kind": kind,
+        "label": spec["label"],
+        "name": spec["name"](mine[0]) if mine else "",
+        "forms": len(mine),
+        "stats": summarise(responses),
+        "trend": trend,
+        "remarks": written,
+        "remarks_withheld": withheld,
+        "min_responses": min_responses(),
     }
 
 
