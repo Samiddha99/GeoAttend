@@ -119,6 +119,7 @@ $(function(){
       '<small class="text-muted-2">'+GA.esc(r.batch)+'</small>' },
     { key:"subject", label:"Subject", render:(v,r)=>
       '<span class="ga-pill pill-violet" title="'+GA.esc(r.subject_name)+'">'+GA.esc(v)+'</span>' },
+    GA.subjectTypeCol(),
     { key:"teacher", label:"Teacher" },
     done
       ? { key:"submitted_at", label:"You answered" }

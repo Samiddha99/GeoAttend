@@ -24,6 +24,7 @@
     {% for d in departments %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}
   </select>
   <select class="form-select form-select-sm" id="f-batch" style="max-width:200px"><option value="">All batches</option></select>
+  {% include "partials/subject_type_filter.html" with id="f-subject-type" %}
   <select class="form-select form-select-sm" id="f-subject" style="max-width:240px"><option value="">All subjects</option></select>
   <select class="form-select form-select-sm" id="f-status" style="max-width:170px">
     <option value="">Any status</option><option value="active">Activated</option>
@@ -271,7 +272,8 @@ $(function(){
 
   function applyFilters(){
     const d=$("#f-department").val(), b=$("#f-batch").val(),
-          s=$("#f-subject").val(), st=$("#f-status").val();
+          s=$("#f-subject").val(), st=$("#f-status").val(),
+          kind=$("#f-subject-type").val();
     {% if wide %}
     const code = s || null;                  // options are codes on this screen
     {% else %}
@@ -283,6 +285,9 @@ $(function(){
       (!st || (st === "no-guardian" ? !r.guardian_mobile
               : st === "device-linked" ? r.device_bound
               : r.status === st)) &&
+      // "Students taking at least one subject of this type" — a student has no
+      // type of their own, and this is the same reading the reports use.
+      (!kind || Object.values(r.subject_types||{}).indexOf(kind) > -1) &&
       (!code || (r.subjects||[]).indexOf(code) > -1));
     table.setRows(view);
     $("#count-pill").text(view.length + " students");
@@ -375,7 +380,10 @@ $(function(){
   }
 
   $("#btn-refresh").on("click", function(){ GA.spin(this, load()); });
-  $("#f-department, #f-batch, #f-subject, #f-status").on("change", function(){
+  $("#f-subject-type").on("change", function(){
+    GA.narrowSubjectSelect("#f-subject", $(this).val());
+  });
+  $("#f-department, #f-batch, #f-subject, #f-subject-type, #f-status").on("change", function(){
     applyFilters();
     $("#btn-export").attr("href", "{% url 'academics:api_students_export' %}?" +
       {% if wide %}"scope=all&" +{% endif %}
@@ -508,21 +516,34 @@ $(function(){
     // build the lists from the rows on show so the filters can always reach
     // every row.
     {% if wide %}
-    const batches = {}, subjects = {};
+    const batches = {}, subjects = {}, kinds = {};
     rows.forEach(function(r){
       if(r.batch_id) batches[r.batch_id] = r.batch;
-      (r.subjects||[]).forEach(c=>{ subjects[c] = c; });
+      (r.subjects||[]).forEach(c=>{
+        subjects[c] = c;
+        kinds[c] = (r.subject_types||{})[c] || kinds[c];
+      });
     });
     const keepB = $("#f-batch").val(), keepS = $("#f-subject").val();
     $("#f-batch").html('<option value="">All batches</option>'+
       Object.keys(batches).sort((a,b)=>batches[a]<batches[b]?-1:1)
         .map(id=>'<option value="'+id+'">'+GA.esc(batches[id])+'</option>').join("")).val(keepB);
-    $("#f-subject").html('<option value="">All subjects</option>'+
-      Object.keys(subjects).sort()
-        .map(c=>'<option value="'+GA.esc(c)+'">'+GA.esc(c)+'</option>').join("")).val(keepS);
+    /*
+      On this screen the option value is a subject code, not an id — the table
+      spans the institute and rows carry codes. GA.subjectOptions wants
+      {id, code, name, subject_type}, so the codes are shaped into that.
+
+      A JS block comment rather than an HTML one: inside a <script> the HTML
+      comment opener is a single-LINE comment in JavaScript, so every line
+      after it is parsed as code.
+    */
+    $("#f-subject").html(GA.subjectOptions(
+      Object.keys(subjects).sort().map(c=>({id:c, code:c, name:subjects[c],
+                                            subject_type:kinds[c]})),
+      {label:s=>s.code})).val(keepS);
     {% else %}
     $("#f-batch").append(lookups.batches.map(b=>'<option value="'+b.id+'">'+GA.esc(b.label)+'</option>').join(""));
-    $("#f-subject").append(lookups.subjects.map(s=>'<option value="'+s.id+'">'+GA.esc(s.code)+' — '+GA.esc(s.name)+'</option>').join(""));
+    $("#f-subject").html(GA.subjectOptions(lookups.subjects));
     {% endif %}
   }
 

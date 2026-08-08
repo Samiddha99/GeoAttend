@@ -1,4 +1,5 @@
 {% extends "layouts/app.html" %}
+{% load academics_extras %}
 {% block page_title %}Class feedback{% endblock %}
 {% block page_sub %}What students said about each class. Responses are shown
 without any way to tell who gave them.{% endblock %}
@@ -32,9 +33,10 @@ without any way to tell who gave them.{% endblock %}
     <option value="">All teachers</option>
     {% for t in teachers %}<option value="{{ t.id }}">{{ t.get_full_name }}</option>{% endfor %}
   </select>
+  {% include "partials/subject_type_filter.html" with id="f-subject-type" width="160px" %}
   <select class="form-select form-select-sm" id="f-subject" style="max-width:190px">
     <option value="">All subjects</option>
-    {% for s in subjects %}<option value="{{ s.id }}">{{ s.code }} — {{ s.name }}</option>{% endfor %}
+    {% include "partials/subject_options.html" with groups=subjects|by_subject_type %}
   </select>
   <select class="form-select form-select-sm" id="f-batch" style="max-width:170px">
     <option value="">All batches</option>
@@ -114,6 +116,7 @@ $(function(){
       '<div>'+GA.esc(r.date)+'</div><small class="text-muted-2">'+GA.esc(r.batch)+'</small>' },
     { key:"subject", label:"Subject", render:(v,r)=>
       '<span class="ga-pill pill-violet" title="'+GA.esc(r.subject_name)+'">'+GA.esc(v)+'</span>' },
+    GA.subjectTypeCol(),
     { key:"teacher", label:"Teacher", render:(v,r)=>
       '<a href="#" class="teacher-link fw-600" data-id="'+r.teacher_id+'">'+GA.esc(v)+'</a>' },
     { key:"department", label:"Department" },
@@ -154,7 +157,8 @@ $(function(){
   function filters(){
     return GA.query({
       department: $("#f-department").val(), teacher: $("#f-teacher").val(),
-      subject: $("#f-subject").val(), batch: $("#f-batch").val(),
+      subject: $("#f-subject").val(), subject_type: $("#f-subject-type").val(),
+      batch: $("#f-batch").val(),
       date: $("#f-date").val(), start: $("#f-start").val(), end: $("#f-end").val(),
     });
   }
@@ -444,8 +448,13 @@ $(function(){
   $("#f-date").on("change", function(){ if(this.value){ $("#f-start,#f-end").val(""); } load(); });
   $("#f-start,#f-end").on("change", function(){ if(this.value){ $("#f-date").val(""); } load(); });
   $("#f-department,#f-teacher,#f-subject,#f-batch").on("change", load);
+  $("#f-subject-type").on("change", function(){
+    GA.narrowSubjectSelect("#f-subject", $(this).val());
+    load();
+  });
   $("#btn-clear").on("click", function(){
-    $("#f-department,#f-teacher,#f-subject,#f-batch,#f-date,#f-start,#f-end").val("");
+    $("#f-department,#f-teacher,#f-subject,#f-subject-type,#f-batch,#f-date,#f-start,#f-end").val("");
+    GA.narrowSubjectSelect("#f-subject", "");
     load();
   });
   $("#scope-tabs").on("click", "[data-scope]", function(){

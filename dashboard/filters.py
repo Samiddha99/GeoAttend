@@ -14,6 +14,7 @@ class ReportFilters:
     department: str | None = None
     batch: str | None = None
     subject: str | None = None
+    subject_type: str | None = None
     teacher: str | None = None
     student: str | None = None
     semester: int | None = None
@@ -50,9 +51,23 @@ class ReportFilters:
                 return None
             return clean_object_id(raw)
 
+        def choice(key, allowed):
+            """
+            A filter whose values are a fixed vocabulary.
+
+            Anything unrecognised becomes None — an unfiltered report — rather
+            than a filter that matches nothing. A typo in a bookmarked URL
+            should not produce an empty page that looks like real data.
+            """
+            raw = (request.GET.get(key) or "").strip().upper()
+            return raw if raw in allowed else None
+
+        from academics.models import SubjectType
+
         return cls(
             start=start, end=end,
             department=oid("department"), batch=oid("batch"), subject=oid("subject"),
+            subject_type=choice("subject_type", set(SubjectType.values)),
             teacher=oid("teacher"), student=oid("student"), semester=num("semester"),
         )
 
@@ -60,6 +75,7 @@ class ReportFilters:
         return {
             "start": self.start.isoformat(), "end": self.end.isoformat(),
             "department": self.department, "batch": self.batch, "subject": self.subject,
+            "subject_type": self.subject_type,
             "teacher": self.teacher, "student": self.student, "semester": self.semester,
         }
 

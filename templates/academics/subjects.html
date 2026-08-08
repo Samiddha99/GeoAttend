@@ -21,6 +21,7 @@
     <option value="">All semesters</option>
     {% for i in "12345678"|make_list %}<option value="{{ i }}">Semester {{ i }}</option>{% endfor %}
   </select>
+  {% include "partials/subject_type_filter.html" with id="type-filter" %}
   <button class="btn btn-light btn-sm ms-auto" id="btn-refresh"><i class="fa-solid fa-rotate"></i></button>
 </div></div>
 
@@ -45,6 +46,16 @@
           <input class="form-control text-uppercase" name="code" placeholder="DSA" required></div>
         <div class="col-md-8 mb-0"><label class="form-label">Subject name *</label>
           <input class="form-control" name="name" placeholder="Data Structures &amp; Algorithms" required></div>
+        <!--
+          No blank first option: the model defaults to Theory, so an unanswered
+          select would silently save a type nobody chose. Whatever is showing is
+          what gets saved, and Theory is showing.
+        -->
+        <div class="col-12 mb-0"><label class="form-label">Subject type *</label>
+          <select class="form-select" name="subject_type" required>
+            {% for t in subject_types %}<option value="{{ t.value }}">{{ t.label }}</option>{% endfor %}
+          </select>
+          <div class="form-text">Practicals are labs and workshops; anything else is Other.</div></div>
         <div class="col-md-6 mb-0"><label class="form-label">Semester</label>
           <select class="form-select" name="semester">
             {% for i in "12345678"|make_list %}<option value="{{ i }}">Semester {{ i }}</option>{% endfor %}
@@ -73,6 +84,7 @@ $(function(){
   const cols = [
     { key:"code", label:"Code", render:v=>'<span class="ga-pill pill-violet">'+GA.esc(v)+'</span>' },
     { key:"name", label:"Subject", render:v=>'<span class="fw-600">'+GA.esc(v)+'</span>' },
+    GA.subjectTypeCol(),
     { key:"department", label:"Department" },
     { key:"semester", label:"Sem", className:"text-center" },
     { key:"credits", label:"Credits", className:"text-center" },
@@ -86,8 +98,11 @@ $(function(){
   ];
 
   function applyFilters(){
-    const d = $("#dept-filter").val(), s = $("#sem-filter").val();
-    table.setRows(rows.filter(r => (!d || r.department_id == d) && (!s || r.semester == s)));
+    const d = $("#dept-filter").val(), s = $("#sem-filter").val(),
+          t = $("#type-filter").val();
+    table.setRows(rows.filter(r =>
+      (!d || r.department_id == d) && (!s || r.semester == s) &&
+      (!t || r.subject_type === t)));
     bind();
   }
 
@@ -107,6 +122,7 @@ $(function(){
       const r = rows.find(x => x.id == $(this).attr("data-id"));
       $("#mtitle").text("Edit subject"); $("#rec-id").val(r.id);
       $('#form [name=code]').val(r.code); $('#form [name=name]').val(r.name);
+      $('#form [name=subject_type]').val(r.subject_type || "THEORY");
       $('#form [name=semester]').val(r.semester); $('#form [name=credits]').val(r.credits);
       $('#form [name=is_active]').prop("checked", r.is_active);
       $('#form [name=department]').val(r.department_id);
@@ -125,7 +141,7 @@ $(function(){
     GA.clearErrors($("#form")); modal.show();
   });
   $("#btn-refresh").on("click", function(){ GA.spin(this, load()); });
-  $("#dept-filter, #sem-filter").on("change", applyFilters);
+  $("#dept-filter, #sem-filter, #type-filter").on("change", applyFilters);
 
   $("#form").on("submit", function(e){
     e.preventDefault();

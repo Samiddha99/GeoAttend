@@ -26,7 +26,15 @@ from .importer import (
     import_students,
     read_rows,
 )
-from .models import Batch, Department, Enrollment, ImportJob, Subject, TeacherAssignment
+from .models import (
+    Batch,
+    Department,
+    Enrollment,
+    ImportJob,
+    Subject,
+    SubjectType,
+    TeacherAssignment,
+)
 from .selectors import (
     all_students_for,
     batches_for,
@@ -329,6 +337,11 @@ def api_subjects(request):
     batch_id = request.GET.get("batch")
     if batch_id:
         qs = qs.filter(assignments__batch_id=batch_id).distinct()
+    # Unknown values are ignored rather than matched: a stale bookmark should
+    # show everything, not an empty list that looks like "no subjects".
+    subject_type = (request.GET.get("subject_type") or "").strip().upper()
+    if subject_type in SubjectType.values:
+        qs = qs.filter(subject_type=subject_type)
     qs = qs.annotate(
         teacher_count=Count(
             "assignments__teacher",
@@ -343,6 +356,8 @@ def api_subjects(request):
     )
     rows = [{
         "id": s.id, "code": s.code, "name": s.name, "semester": s.semester,
+        "subject_type": s.subject_type,
+        "subject_type_label": s.get_subject_type_display(),
         "credits": s.credits, "department": s.department.name,
         "department_id": s.department_id, "is_active": s.is_active,
         "teacher_count": s.teacher_count, "student_count": s.student_count,
@@ -465,6 +480,7 @@ def _assignment_rows(teacher):
         "id": a.id,
         "subject_id": a.subject_id,
         "subject": f"{a.subject.code} — {a.subject.name}",
+        "subject_type": a.subject.subject_type,
         "batch_id": a.batch_id,
         "batch": a.batch.label,
     } for a in teacher.assignments.select_related("subject", "batch").filter(
@@ -715,6 +731,11 @@ def api_students(request):
         "department": s.department.name,
         "department_id": s.department_id,
         "subjects": [e.subject.code for e in s.enrollments.all()],
+        # Code -> type, so the subject dropdown on this screen can group itself.
+        # It is built from the rows rather than from api_lookups because this
+        # table spans the institute while a teacher's lookups do not.
+        "subject_types": {e.subject.code: e.subject.subject_type
+                          for e in s.enrollments.all()},
         "status": "active" if s.user.registration_completed else "invited",
         "is_active": s.is_active and s.user.is_active,
         "device_bound": bool(s.user.device_id),
@@ -1021,7 +1042,9 @@ def api_lookups(request):
     depts = [{"id": d.id, "name": d.name, "code": d.code} for d in departments_for(user)]
     batches = [{"id": b.id, "label": b.label, "department_id": b.department_id}
                for b in batches_for(user).select_related("department")]
-    subjects = [{"id": s.id, "code": s.code, "name": s.name, "department_id": s.department_id}
+    subjects = [{"id": s.id, "code": s.code, "name": s.name,
+                 "department_id": s.department_id, "subject_type": s.subject_type,
+                 "semester": s.semester}
                 for s in subjects_for(user)]
     teachers = []
     if user.role in (HEAD, HOD):
@@ -1029,4 +1052,7 @@ def api_lookups(request):
     return ok({
         "departments": depts, "batches": batches, "subjects": subjects,
         "teachers": teachers, "role": user.role,
+        # Sent with the lookups so a dropdown built in the browser groups by
+        # the same list, in the same order, as one rendered server-side.
+        "subject_types": [{"value": v, "label": l} for v, l in SubjectType.choices],
     })

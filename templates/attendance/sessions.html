@@ -15,6 +15,11 @@
       <input type="date" class="form-control form-control-sm" id="f-end" value="{{ default_end }}"></div>
     <div class="col-6 col-md-2"><label class="form-label mb-1">Batch</label>
       <select class="form-select form-select-sm" id="f-batch"><option value="">All</option></select></div>
+    <div class="col-6 col-md-2"><label class="form-label mb-1">Subject type</label>
+      <select class="form-select form-select-sm" id="f-subject-type">
+        <option value="">All types</option>
+        {% for t in subject_types %}<option value="{{ t.value }}">{{ t.label }}</option>{% endfor %}
+      </select></div>
     <div class="col-6 col-md-3"><label class="form-label mb-1">Subject</label>
       <select class="form-select form-select-sm" id="f-subject"><option value="">All</option></select></div>
     <div class="col-6 col-md-2"><label class="form-label mb-1">Status</label>
@@ -46,6 +51,7 @@ $(function(){
     { key:"time", label:"Time" },
     { key:"subject", label:"Subject", render:(v,r)=>
       '<div><span class="ga-pill pill-violet">'+GA.esc(v)+'</span> <span class="fw-600">'+GA.esc(r.subject_name)+'</span></div>' },
+    GA.subjectTypeCol(),
     { key:"batch", label:"Batch" },
     { key:"teacher", label:"Teacher" },
     { key:"expected", label:"Enrolled", className:"text-center" },
@@ -60,7 +66,8 @@ $(function(){
     GA.loading("#tbl", {rows:10, cols:6});
     return GA.get("{% url 'attendance:api_sessions' %}", GA.query({
       start:$("#f-start").val(), end:$("#f-end").val(), batch:$("#f-batch").val(),
-      subject:$("#f-subject").val(), status:$("#f-status").val()
+      subject:$("#f-subject").val(), subject_type:$("#f-subject-type").val(),
+      status:$("#f-status").val()
     })).done(function(res){
       const rows = res.data.rows;
       $("#count-pill").text(rows.length+" sessions");
@@ -72,9 +79,13 @@ $(function(){
   }
   $("#btn-apply").on("click", function(){ GA.spin(this, load()); });
   $("#f-status, #f-batch, #f-subject").on("change", load);
+  $("#f-subject-type").on("change", function(){
+    GA.narrowSubjectSelect("#f-subject", $(this).val());
+    load();
+  });
   GA.get("{% url 'academics:api_lookups' %}").done(function(res){
     $("#f-batch").append(res.data.batches.map(b=>'<option value="'+b.id+'">'+GA.esc(b.label)+'</option>').join(""));
-    $("#f-subject").append(res.data.subjects.map(s=>'<option value="'+s.id+'">'+GA.esc(s.code)+' — '+GA.esc(s.name)+'</option>').join(""));
+    $("#f-subject").append(GA.subjectOptions(res.data.subjects, {all:false}));
     load();
   });
 });

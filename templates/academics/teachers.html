@@ -1,4 +1,5 @@
 {% extends "layouts/app.html" %}
+{% load academics_extras %}
 {% block page_title %}Teachers{% endblock %}
 {% block page_sub %}{% if can_manage %}Invite teachers and allocate subjects. You can see every department; you can only change your own.{% elif is_student %}Who teaches what across the institute.{% else %}Everyone teaching in this institute and the subjects they take.{% endif %}{% endblock %}
 {% block topbar_actions %}
@@ -22,10 +23,11 @@
     <option value="">All departments</option>
     {% for d in filter_departments %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}
   </select>
+  {% include "partials/subject_type_filter.html" with id="f-subject-type" %}
   <select class="form-select form-select-sm" id="f-subject" style="max-width:240px"
-          data-all='[{% for s in filter_subjects %}{"id":"{{ s.id }}","code":"{{ s.code|escapejs }}","name":"{{ s.name|escapejs }}","department_id":"{{ s.department_id }}"}{% if not forloop.last %},{% endif %}{% endfor %}]'>
+          data-all='[{% for s in filter_subjects %}{"id":"{{ s.id }}","code":"{{ s.code|escapejs }}","name":"{{ s.name|escapejs }}","department_id":"{{ s.department_id }}","semester":"{{ s.semester }}","subject_type":"{{ s.subject_type }}"}{% if not forloop.last %},{% endif %}{% endfor %}]'>
     <option value="">All subjects</option>
-    {% for s in filter_subjects %}<option value="{{ s.id }}">{{ s.code }} — {{ s.name }}</option>{% endfor %}
+    {% include "partials/subject_options.html" with groups=filter_subjects|by_subject_type %}
   </select>
   <select class="form-select form-select-sm {% if is_student %}d-none{% endif %}"
           id="f-status" style="max-width:180px">
@@ -250,22 +252,30 @@ $(function(){
   const ALL_SUBJECTS = JSON.parse($("#f-subject").attr("data-all") || "[]");
 
   function fillSubjectOptions(){
-    const d = $("#f-dept").val();
+    const d = $("#f-dept").val(), kind = $("#f-subject-type").val();
     const keep = $("#f-subject").val();
-    const subs = ALL_SUBJECTS.filter(s=>!d || s.department_id == d);
+    // Rebuilt rather than hidden: this list is already being reassembled for
+    // the department filter, so the type is just one more predicate — and a
+    // rebuilt list cannot leave a stale empty <optgroup> behind.
+    const subs = ALL_SUBJECTS.filter(s =>
+      (!d || s.department_id == d) && (!kind || s.subject_type === kind));
     $("#f-subject").html('<option value="">All subjects</option>'+
-      subs.map(s=>'<option value="'+s.id+'">'+GA.esc(s.code)+' — '+GA.esc(s.name)+'</option>').join(""));
-    // Keep the chosen subject selected if it still belongs to the department.
+      GA.subjectOptions(subs, {all:false}));
+    // Keep the chosen subject selected if it survived the narrowing.
     if(keep && subs.some(s=>s.id == keep)) $("#f-subject").val(keep);
   }
 
   function applyFilters(){
-    const d = $("#f-dept").val(), sid = $("#f-subject").val(), st = $("#f-status").val();
+    const d = $("#f-dept").val(), sid = $("#f-subject").val(), st = $("#f-status").val(),
+          kind = $("#f-subject-type").val();
     const view = rows.filter(function(r){
       if(d && r.department_id != d) return false;
       // Subject match is against the teacher's live allocations, so a teacher
       // only appears if they actually teach that subject somewhere.
       if(sid && !(r.assignments||[]).some(a=>a.subject_id == sid)) return false;
+      // Same rule one level up: teachers who take at least one subject of
+      // this type.
+      if(kind && !(r.assignments||[]).some(a=>a.subject_type === kind)) return false;
       if(st === "deactivated") return !r.is_active;
       if(st === "unassigned")  return !(r.assignments||[]).length;
       // Activated/Invited describe registration, which is independent of being
@@ -303,10 +313,10 @@ $(function(){
 
   // Filtering is client-side: the rows are already loaded, so re-filtering is
   // instant and does not cost a round trip.
-  $("#f-dept").on("change", function(){ fillSubjectOptions(); applyFilters(); });
+  $("#f-dept, #f-subject-type").on("change", function(){ fillSubjectOptions(); applyFilters(); });
   $("#f-subject, #f-status").on("change", applyFilters);
   $("#btn-reset-filters").on("click", function(){
-    $("#f-dept, #f-subject, #f-status").val("");
+    $("#f-dept, #f-subject, #f-subject-type, #f-status").val("");
     $("#search").val("").trigger("input");
     fillSubjectOptions(); applyFilters();
   });

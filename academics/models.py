@@ -65,10 +65,33 @@ class Batch(models.Model):
         return self.students.count()
 
 
+class SubjectType(models.TextChoices):
+    """
+    How a subject is taught.
+
+    Stored as a short code rather than a free string so that grouping a
+    dropdown and filtering a report agree on what the categories are. Kept
+    deliberately coarse — a lab and a lecture behave differently for
+    attendance; a seminar and a workshop mostly do not, and both land in
+    Other rather than growing the list.
+    """
+
+    THEORY = "THEORY", "Theory"
+    PRACTICAL = "PRACTICAL", "Practical"
+    OTHER = "OTHER", "Other"
+
+
 class Subject(models.Model):
     department = models.ForeignKey(Department, on_delete=models.CASCADE, related_name="subjects")
     code = models.CharField(max_length=20)
     name = models.CharField(max_length=150)
+    # Defaulted rather than required at the database level: every subject that
+    # already exists predates this field and is a lecture course, so Theory is
+    # the honest backfill. The *form* still makes the choice explicit.
+    subject_type = models.CharField(
+        max_length=12, choices=SubjectType.choices, default=SubjectType.THEORY,
+        verbose_name="Subject type",
+    )
     semester = models.PositiveSmallIntegerField(
         default=1, validators=[MinValueValidator(1), MaxValueValidator(12)]
     )
@@ -77,6 +100,10 @@ class Subject(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
+        # Left alone on purpose. Ordering by `subject_type` would sort the
+        # stored codes alphabetically — OTHER, PRACTICAL, THEORY — which is not
+        # the order anyone wants to read. Grouping is done in Python against
+        # SubjectType.choices, which is declared in the order we mean.
         ordering = ["semester", "code"]
         constraints = [
             models.UniqueConstraint(fields=["department", "code"], name="uniq_subject_per_dept"),

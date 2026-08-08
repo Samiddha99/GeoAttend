@@ -10,7 +10,7 @@ from django.utils import timezone
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.decorators.http import require_GET, require_POST
 
-from academics.models import StudentProfile, Subject, TeacherAssignment
+from academics.models import StudentProfile, Subject, SubjectType, TeacherAssignment
 from academics.selectors import (
     batches_for,
     departments_for,
@@ -138,6 +138,7 @@ def api_batch_subjects(request, batch_id):
             "id": s.id,
             "code": s.code,
             "name": s.name,
+            "subject_type": s.subject_type,
             "semester": s.semester,
             "enrolled": enrolled_students(s, batch).count(),
         })
@@ -314,6 +315,11 @@ def api_sessions(request):
         qs = qs.filter(session_date__gte=start)
     if end:
         qs = qs.filter(session_date__lte=end)
+    # An unrecognised type is ignored rather than matched, so a stale bookmark
+    # shows everything instead of an empty list that reads like "no classes".
+    subject_type = (request.GET.get("subject_type") or "").strip().upper()
+    if subject_type in SubjectType.values:
+        qs = qs.filter(subject__subject_type=subject_type)
     status = request.GET.get("status")
     if status == "OPEN":
         qs = qs.filter(status=AttendanceSession.Status.OPEN, expires_at__gt=timezone.now())
@@ -324,6 +330,7 @@ def api_sessions(request):
         "time": timezone.localtime(s.created_at).strftime("%H:%M"),
         "subject": s.subject.code,
         "subject_name": s.subject.name,
+        "subject_type": s.subject.subject_type,
         "batch": s.batch.label,
         "teacher": s.teacher.full_name or s.teacher.email,
         "expected": s.expected_count,
@@ -497,6 +504,7 @@ def _reason_row(r, *, for_reviewer=False):
         "date_iso": r.session.session_date.isoformat(),
         "subject": r.session.subject.code,
         "subject_name": r.session.subject.name,
+        "subject_type": r.session.subject.subject_type,
         "batch": r.session.batch.label,
         "reason": r.reason,
         "status": r.status,
@@ -713,6 +721,7 @@ def _planned_row(p, *, for_reviewer=False, only_subjects=None):
             "subject_id": d.subject_id,
             "subject": d.subject.code,
             "subject_name": d.subject.name,
+            "subject_type": d.subject.subject_type,
             "status": d.status,
             "status_label": d.get_status_display(),
             "remark": d.review_remark,

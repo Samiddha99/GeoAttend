@@ -23,7 +23,17 @@ class DepartmentForm(BootstrapMixin, forms.ModelForm):
 class SubjectForm(BootstrapMixin, forms.ModelForm):
     class Meta:
         model = Subject
-        fields = ["code", "name", "semester", "credits", "is_active"]
+        fields = ["code", "name", "subject_type", "semester", "credits", "is_active"]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # The model defaults to Theory so that existing rows stay valid, but a
+        # person filling the form should be choosing rather than inheriting a
+        # default they never saw. Required here, not on the column — and the
+        # blank option stripped in case a future `blank=True` puts one back.
+        field = self.fields["subject_type"]
+        field.required = True
+        field.choices = [choice for choice in field.choices if choice[0]]
 
 
 class BatchForm(BootstrapMixin, forms.ModelForm):

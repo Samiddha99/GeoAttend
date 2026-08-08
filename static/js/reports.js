@@ -9,6 +9,7 @@
       department: $("#f-department").val(),
       batch: $("#f-batch").val(),
       subject: $("#f-subject").val(),
+      subject_type: $("#f-subject-type").val(),
       semester: $("#f-semester").val(),
       teacher: $("#f-teacher").val()
     });
@@ -25,28 +26,42 @@
     });
     $("#f-reset").on("click", function () {
       $("#filter-form")[0].reset();
-      $("#f-department, #f-batch, #f-subject, #f-semester, #f-teacher").val("");
-      $("#f-subject option").show();          // undo any narrowing
+      $("#f-department, #f-batch, #f-subject, #f-subject-type, #f-semester, #f-teacher").val("");
+      $("#f-subject option, #f-subject optgroup").show();   // undo any narrowing
       $(".ga-chip.quick").removeClass("sel").filter('[data-range="year"]').addClass("sel");
       GA.spin(this, onApply());
     });
 
-    // Department and semester both narrow the subject list; applying them
-    // together is what makes "semester 3 of CSE" a usable pair of filters.
+    // Department, semester and type all narrow the subject list; applying them
+    // together is what makes "the semester 3 CSE practicals" a usable set of
+    // filters.
     function narrowSubjects() {
-      const d = $("#f-department").val(), sem = $("#f-semester").val();
+      const d = $("#f-department").val(), sem = $("#f-semester").val(),
+            type = $("#f-subject-type").val();
       $("#f-batch option").each(function () {
         const own = $(this).data("dept");
         $(this).toggle(!d || !own || String(own) === String(d));
       });
       let hidCurrent = false;
+      // Counted per group as we go. The options live inside <optgroup>s now,
+      // and hiding every option in a group leaves the heading behind in most
+      // browsers — so narrowing to Practical would still show an empty
+      // "Theory" heading unless the group is hidden too.
+      const kept = {};
       $("#f-subject option").each(function () {
         if (!$(this).val()) return;                      // keep "All subjects"
-        const own = $(this).data("dept"), mine = $(this).data("sem");
+        const own = $(this).data("dept"), mine = $(this).data("sem"),
+              kind = $(this).data("type");
         const show = (!d || !own || String(own) === String(d)) &&
-                     (!sem || String(mine) === String(sem));
+                     (!sem || String(mine) === String(sem)) &&
+                     (!type || !kind || String(kind) === String(type));
         $(this).toggle(show);
         if (!show && $(this).is(":selected")) hidCurrent = true;
+        const group = $(this).closest("optgroup").attr("label");
+        if (group) kept[group] = (kept[group] || 0) + (show ? 1 : 0);
+      });
+      $("#f-subject optgroup").each(function () {
+        $(this).toggle(kept[$(this).attr("label")] > 0);
       });
       // Only clear the subject if the narrowing actually hid the chosen one.
       if (hidCurrent) $("#f-subject").val("");
@@ -57,7 +72,7 @@
       narrowSubjects();
       onApply();
     });
-    $("#f-semester").on("change", function () {
+    $("#f-semester, #f-subject-type").on("change", function () {
       narrowSubjects();
       onApply();
     });

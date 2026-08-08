@@ -1,0 +1,26 @@
+<!--
+  The <option> list for a subject dropdown, grouped into Theory / Practical /
+  Other.
+
+  Include it with a `groups` argument — see filters.html for a live example.
+  (Written in prose on purpose: an include tag written out here would be a real
+  tag, not an illustration, and the file would include itself forever. HTML
+  comments hide things from the browser, not from Django.)
+
+  `groups` comes from academics.selectors.grouped_subjects(), which drops empty
+  types and keeps the declared order — so a department with no labs simply has
+  no Practical heading rather than an empty one.
+
+  The data- attributes are load-bearing: several toolbars narrow this list by
+  department, semester or type without going back to the server, and they read
+  them off the option.
+-->
+{% for g in groups %}
+<optgroup label="{{ g.label }}">
+  {% for s in g.subjects %}
+  <option value="{{ s.id }}" data-dept="{{ s.department_id }}"
+          data-sem="{{ s.semester }}" data-type="{{ s.subject_type }}">
+    {{ s.code }} — {{ s.name }}</option>
+  {% endfor %}
+</optgroup>
+{% endfor %}

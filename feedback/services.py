@@ -208,6 +208,7 @@ def student_row(recipient, response=None):
         "id": form.id,
         "subject": session.subject.code,
         "subject_name": session.subject.name,
+        "subject_type": session.subject.subject_type,
         "teacher": session.teacher.full_name or session.teacher.email,
         "batch": session.batch.label,
         "date": session.session_date.strftime("%d %b %Y"),
@@ -350,6 +351,7 @@ def remarks_from(forms):
                 "date": form.session.session_date.strftime("%d %b %Y"),
                 "date_iso": form.session.session_date.isoformat(),
                 "subject": form.session.subject.code,
+                "subject_type": form.session.subject.subject_type,
                 "teacher": (form.session.teacher.full_name
                             or form.session.teacher.email),
                 "batch": form.session.batch.label,
@@ -368,6 +370,7 @@ def staff_form_row(form, *, responses=None):
         "date_iso": session.session_date.isoformat(),
         "subject": session.subject.code,
         "subject_name": session.subject.name,
+        "subject_type": session.subject.subject_type,
         "subject_id": session.subject_id,
         "teacher": session.teacher.full_name or session.teacher.email,
         "teacher_id": session.teacher_id,
@@ -470,6 +473,8 @@ def filtered_forms(user, params):
     """
     from core.utils import clean_object_id, parse_date
 
+    from academics.models import SubjectType
+
     qs = visible_forms(user).prefetch_related("responses")
     for field, param in (("session__subject_id", "subject"),
                          ("session__teacher_id", "teacher"),
@@ -478,6 +483,13 @@ def filtered_forms(user, params):
         value = clean_object_id(params.get(param))
         if value:
             qs = qs.filter(**{field: value})
+
+    # Not an id, so it does not go through clean_object_id. Unrecognised values
+    # are dropped rather than matched — an empty page is indistinguishable from
+    # a real "no feedback yet", and the wrong one of those is misleading.
+    subject_type = (params.get("subject_type") or "").strip().upper()
+    if subject_type in SubjectType.values:
+        qs = qs.filter(session__subject__subject_type=subject_type)
 
     # A single date and a range are the same filter with the ends collapsed.
     on = parse_date(params.get("date"))

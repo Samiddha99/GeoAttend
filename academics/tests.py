@@ -1,14 +1,142 @@
+import types
+
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import TestCase
+from django.test import SimpleTestCase, TestCase
 from django.urls import reverse
 
+from academics.forms import SubjectForm
 from academics.importer import import_students, read_rows
-from academics.models import Batch, Department, Enrollment, StudentProfile, Subject
+from academics.models import (
+    Batch,
+    Department,
+    Enrollment,
+    StudentProfile,
+    Subject,
+    SubjectType,
+)
+from academics.selectors import grouped_subjects, subject_type_options
+from academics.templatetags.academics_extras import by_subject_type
 from accounts.models import Institute, User
 
 
 HEADER = ("Name,Mobile Number,Email,Batch,Subjects Enrolled,"
           "Guardian Mobile,Guardian Name,Roll Number")
+
+
+def _subject(code, name, subject_type, department_id="D1", semester=3):
+    """A stand-in with just the attributes the grouping helpers read."""
+    return types.SimpleNamespace(
+        id=code.lower(), code=code, name=name, subject_type=subject_type,
+        department_id=department_id, semester=semester)
+
+
+class SubjectTypeTests(SimpleTestCase):
+    """How a subject is taught — the vocabulary and how it is grouped."""
+
+    def test_the_three_types_are_offered_in_the_order_they_are_declared(self):
+        """
+        Not alphabetical, and not the database's idea of order. Ordering a
+        query by `subject_type` would sort the stored codes — OTHER, PRACTICAL,
+        THEORY — which is why grouping is done in Python instead.
+        """
+        self.assertEqual([t["value"] for t in subject_type_options()],
+                         ["THEORY", "PRACTICAL", "OTHER"])
+        self.assertEqual([t["label"] for t in subject_type_options()],
+                         ["Theory", "Practical", "Other"])
+
+    def test_subjects_are_bundled_into_their_type(self):
+        groups = grouped_subjects([
+            _subject("DSA", "Data Structures", "THEORY"),
+            _subject("DSA-L", "DS Lab", "PRACTICAL"),
+            _subject("DBMS", "Databases", "THEORY"),
+        ])
+        self.assertEqual([g["label"] for g in groups], ["Theory", "Practical"])
+        self.assertEqual([s.code for s in groups[0]["subjects"]], ["DSA", "DBMS"])
+
+    def test_a_type_with_no_subjects_gets_no_heading(self):
+        """An <optgroup> with nothing under it is a heading nobody can use."""
+        groups = grouped_subjects([_subject("DSA", "Data Structures", "THEORY")])
+        self.assertEqual([g["label"] for g in groups], ["Theory"])
+
+    def test_a_subject_with_an_unknown_type_is_still_listed(self):
+        """
+        If a fourth type is ever added and this code is not updated, the
+        subject must still be pickable. Dropping it would quietly remove a
+        subject from every dropdown in the app.
+        """
+        groups = grouped_subjects([_subject("X", "Mystery", "TUTORIAL")])
+        self.assertEqual([s.code for g in groups for s in g["subjects"]], ["X"])
+
+    def test_the_template_filter_survives_a_view_that_passed_nothing(self):
+        """A missing `subjects` should render an empty dropdown, not a 500."""
+        self.assertEqual(by_subject_type(None), [])
+        self.assertEqual(by_subject_type([]), [])
+
+
+class SubjectFormTypeTests(SimpleTestCase):
+    """The type is chosen, not inherited."""
+
+    def _post(self, **overrides):
+        data = {"code": "DSA", "name": "Data Structures", "semester": "3",
+                "credits": "4", "is_active": "on", "subject_type": "THEORY"}
+        data.update(overrides)
+        return SubjectForm(data)
+
+    def test_the_form_has_no_blank_option(self):
+        """
+        The model defaults to Theory, so a blank row would silently save a type
+        nobody picked. Whatever is showing is what gets saved.
+        """
+        choices = SubjectForm().fields["subject_type"].choices
+        self.assertEqual([value for value, _ in choices],
+                         ["THEORY", "PRACTICAL", "OTHER"])
+
+    def test_each_type_is_accepted(self):
+        for value in SubjectType.values:
+            with self.subTest(type=value):
+                form = self._post(subject_type=value)
+                self.assertTrue(form.is_valid(), form.errors)
+                self.assertEqual(form.cleaned_data["subject_type"], value)
+
+    def test_a_type_outside_the_vocabulary_is_refused(self):
+        self.assertFalse(self._post(subject_type="LAB").is_valid())
+        self.assertFalse(self._post(subject_type="theory").is_valid())
+
+    def test_leaving_it_out_is_refused_rather_than_defaulted(self):
+        form = SubjectForm({"code": "DSA", "name": "Data Structures",
+                            "semester": "3", "credits": "4", "is_active": "on"})
+        self.assertFalse(form.is_valid())
+        self.assertIn("subject_type", form.errors)
+
+
+class SubjectTypeFilterParsingTests(SimpleTestCase):
+    """The query-string filter every report shares."""
+
+    def _parse(self, **params):
+        from dashboard.filters import ReportFilters
+
+        return ReportFilters.from_request(types.SimpleNamespace(GET=params))
+
+    def test_it_reads_a_type(self):
+        self.assertEqual(self._parse(subject_type="PRACTICAL").subject_type,
+                         "PRACTICAL")
+
+    def test_case_and_spacing_are_forgiven(self):
+        self.assertEqual(self._parse(subject_type=" practical ").subject_type,
+                         "PRACTICAL")
+
+    def test_an_unknown_type_means_no_filter_rather_than_no_results(self):
+        """
+        A typo in a bookmarked URL should show everything. Matching on it
+        instead gives an empty page that is indistinguishable from a real
+        "nothing here yet".
+        """
+        self.assertIsNone(self._parse(subject_type="LAB").subject_type)
+        self.assertIsNone(self._parse(subject_type="").subject_type)
+        self.assertIsNone(self._parse().subject_type)
+
+    def test_it_travels_with_the_other_filters(self):
+        self.assertIn("subject_type", self._parse(subject_type="OTHER").as_dict())
 
 
 def make_csv(rows, header=HEADER):

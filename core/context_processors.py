@@ -3,11 +3,18 @@ from django.conf import settings
 
 def site(request):
     """Expose a few globals to every template."""
+    from academics.selectors import subject_type_options
+
     user = getattr(request, "user", None)
     return {
         "SITE_NAME": settings.SITE_NAME,
         "SITE_URL": settings.SITE_URL,
         "ATT_CONF": settings.ATTENDANCE,
+        # A global because the subject-type filter appears on nine pages owned
+        # by four apps. Threading it through nine view contexts means nine
+        # chances to forget, and the symptom of forgetting — a filter with no
+        # options — is easy to miss in review.
+        "subject_types": subject_type_options(),
         "current_role": getattr(user, "role", None) if getattr(user, "is_authenticated", False) else None,
         "pending_reviews": pending_review_count(user),
         "pending_feedback": pending_feedback_count(user),

@@ -104,6 +104,7 @@ $(function(){
       '<small class="text-muted-2">'+GA.esc(r.batch)+'</small>' },
     { key:"subject", label:"Subject", render:(v,r)=>
       '<span class="ga-pill pill-violet" title="'+GA.esc(r.subject_name)+'">'+GA.esc(v)+'</span>' },
+    GA.subjectTypeCol(),
     { key:"reason", label:"Your reason", sortable:false,
       csv:(v,r)=> v + ((r.attachments||[]).length
         ? " [" + r.attachments.map(a=>a.name).join(", ") + "]" : ""),

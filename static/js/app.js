@@ -1199,6 +1199,112 @@ window.GA = (function ($) {
   }
 
   /**
+   * How a subject is taught, as a pill.
+   *
+   * The labels are duplicated here rather than sent with every row because a
+   * table of 800 subjects would otherwise carry the same three strings 800
+   * times. If a fourth type is ever added and this list is not updated, the
+   * stored code is shown verbatim — wrong-looking, but never blank.
+   */
+  var SUBJECT_TYPES = {
+    THEORY: ["Theory", "pill-blue"],
+    PRACTICAL: ["Practical", "pill-amber"],
+    OTHER: ["Other", "pill-grey"]
+  };
+
+  function subjectType(value) {
+    if (!value) return '<span class="text-muted-2">—</span>';
+    var known = SUBJECT_TYPES[value] || [value, "pill-grey"];
+    return '<span class="ga-pill ' + known[1] + '">' + esc(known[0]) + "</span>";
+  }
+
+  function subjectTypeLabel(value) {
+    return (SUBJECT_TYPES[value] || [value])[0];
+  }
+
+  /**
+   * A subject dropdown's options, grouped into <optgroup>s by type.
+   *
+   *   $("#f-subject").html(GA.subjectOptions(list, {all: "All subjects"}));
+   *
+   * Mirrors partials/subject_options.html so a dropdown filled by an AJAX
+   * lookup looks the same as one rendered by Django. Types with no subjects
+   * are skipped — an empty heading is just noise — and anything carrying an
+   * unrecognised type still appears, under its own heading, rather than
+   * vanishing from a list the user is trying to pick from.
+   */
+  function subjectOptions(list, opts) {
+    var o = $.extend({ all: "All subjects", label: null }, opts || {});
+    var order = Object.keys(SUBJECT_TYPES);
+    var buckets = {};
+    $.each(list || [], function (_i, s) {
+      var key = s.subject_type || "OTHER";
+      if (order.indexOf(key) === -1) order.push(key);
+      (buckets[key] = buckets[key] || []).push(s);
+    });
+    var html = o.all === false ? "" : '<option value="">' + esc(o.all) + "</option>";
+    $.each(order, function (_i, key) {
+      var items = buckets[key];
+      if (!items || !items.length) return;
+      html += '<optgroup label="' + esc(subjectTypeLabel(key)) + '">';
+      $.each(items, function (_j, s) {
+        var text = o.label ? o.label(s) : s.code + " — " + s.name;
+        html += '<option value="' + esc(s.id) + '"' +
+          ' data-dept="' + esc(s.department_id == null ? "" : s.department_id) + '"' +
+          ' data-sem="' + esc(s.semester == null ? "" : s.semester) + '"' +
+          ' data-type="' + esc(key) + '">' + esc(text) + "</option>";
+      });
+      html += "</optgroup>";
+    });
+    return html;
+  }
+
+  /**
+   * Narrow a grouped subject dropdown to one type.
+   *
+   * Hides the whole <optgroup> rather than its options: leaving an empty
+   * heading behind is what browsers do if you only hide the options. Clears
+   * the selection if the narrowing hid whatever was chosen, so the dropdown
+   * can never report a subject the user can no longer see.
+   */
+  function narrowSubjectSelect(selector, type) {
+    var $sel = $(selector);
+    var chosen = $sel.val();
+    var stillThere = !chosen;          // "All subjects" always survives
+    $sel.find("optgroup").each(function () {
+      var mine = $(this).find("option").first().data("type");
+      var show = !type || String(mine) === String(type);
+      $(this).toggle(show);
+      var $options = $(this).find("option");
+      $options.toggle(show);
+      // Decided from `show`, not by asking the DOM afterwards. A hidden-ness
+      // test like :hidden needs layout, and an <option> inside a closed
+      // <select> has none — so it answers "hidden" for everything and the
+      // user's choice gets cleared every time they touch the type filter.
+      if (show && $options.filter('[value="' + chosen + '"]').length) {
+        stillThere = true;
+      }
+    });
+    if (!stillThere) $sel.val("");
+  }
+
+  /**
+   * The Subject-type column, ready to splice into a table's column list.
+   *
+   * A function rather than a shared object: GA.table stores state on the
+   * column, so handing the same object to two tables makes them interfere.
+   */
+  function subjectTypeCol(key) {
+    return {
+      key: key || "subject_type",
+      label: "Subject type",
+      className: "text-center",
+      csv: function (v) { return subjectTypeLabel(v); },
+      render: function (v) { return subjectType(v); }
+    };
+  }
+
+  /**
    * A star rating as stars.
    *
    * Half-stars deliberately: an average of 3.5 shown as three stars reads as
@@ -1275,6 +1381,8 @@ window.GA = (function ($) {
     loading, done, chartIsEmpty, spin, absenceReason, absenceCell,
     plannedDecision, plannedChip, reasonDetail, reasonChip,
     attachmentList, attachField, attachCheck, attachForm, ATTACH,
-    stars, feedbackBadge, reviewBadge, downloadCsv, csvText
+    stars, feedbackBadge, reviewBadge, downloadCsv, csvText,
+    subjectType, subjectTypeLabel, subjectTypeCol, subjectOptions,
+    narrowSubjectSelect, SUBJECT_TYPES
   };
 })(jQuery);

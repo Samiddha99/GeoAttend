@@ -1,3 +1,4 @@
+{% load academics_extras %}
 <!-- Shared report filter bar — every dashboard reuses it -->
 <div class="card mb-3">
   <div class="card-body py-3">
@@ -36,10 +37,17 @@
       </div>
       {% endif %}
       <div class="col-6 col-md-2">
+        <label class="form-label mb-1">Subject type</label>
+        <select class="form-select form-select-sm" name="subject_type" id="f-subject-type">
+          <option value="">All types</option>
+          {% for t in subject_types %}<option value="{{ t.value }}">{{ t.label }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="col-6 col-md-2">
         <label class="form-label mb-1">Subject</label>
         <select class="form-select form-select-sm" name="subject" id="f-subject">
           <option value="">All subjects</option>
-          {% for s in subjects %}<option value="{{ s.id }}" data-dept="{{ s.department_id }}" data-sem="{{ s.semester }}">{{ s.code }} — {{ s.name }}</option>{% endfor %}
+          {% include "partials/subject_options.html" with groups=subjects|by_subject_type %}
         </select>
       </div>
       {% if teachers %}

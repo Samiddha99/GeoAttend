@@ -1,5 +1,5 @@
 {% extends "layouts/app.html" %}
-{% load static %}
+{% load static academics_extras %}
 {% block page_title %}Low-attendance alerts{% endblock %}
 {% block page_sub %}Email students, WhatsApp them and their guardians when attendance slips.{% endblock %}
 {% block topbar_actions %}
@@ -50,11 +50,16 @@
             <i class="fa-solid fa-book me-1"></i>One subject</button>
         </div>
 
+        <!--
+          No subject-type filter here: this picks exactly one subject to alert
+          on, and the dropdown is already grouped by type. A second control
+          that only hides options would be a filter on a filter.
+        -->
         <div class="mb-3 d-none" id="subject-wrap">
           <label class="form-label">Subject *</label>
           <select class="form-select" id="f-subject">
             <option value="">Choose a subject…</option>
-            {% for s in subjects %}<option value="{{ s.id }}">{{ s.code }} — {{ s.name }}</option>{% endfor %}
+            {% include "partials/subject_options.html" with groups=subjects|by_subject_type %}
           </select>
         </div>
 
@@ -618,6 +623,7 @@ $(function(){
           { key:"when", label:"When" },
           { key:"scope", label:"Type" },
           { key:"subject", label:"Subject" },
+          GA.subjectTypeCol(),
           { key:"threshold", label:"Below", render:v=>v + "%" },
           { key:"range", label:"Period" },
           { key:"by", label:"Sent by" },

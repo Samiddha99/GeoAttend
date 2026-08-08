@@ -60,6 +60,8 @@ def scoped_sessions(user, f=None):
         qs = qs.filter(batch_id=f.batch)
     if f.subject:
         qs = qs.filter(subject_id=f.subject)
+    if f.subject_type:
+        qs = qs.filter(subject__subject_type=f.subject_type)
     if f.teacher:
         qs = qs.filter(teacher_id=f.teacher)
     if f.semester:
@@ -77,6 +79,11 @@ def scoped_students(user, f=None):
         qs = qs.filter(batch_id=f.batch)
     if f.subject:
         qs = qs.filter(enrollments__subject_id=f.subject, enrollments__is_active=True)
+    if f.subject_type:
+        # Same reading as the semester filter below: students taking at least
+        # one subject of that type, since a student has no type of their own.
+        qs = qs.filter(enrollments__subject__subject_type=f.subject_type,
+                       enrollments__is_active=True)
     if f.semester:
         # A student is not "in" a semester — their subjects are. So this means
         # "students taking at least one subject of that semester", which is what
@@ -177,7 +184,7 @@ def student_report(user, f, limit=3000):
     p_counts = present_counts(sessions)
 
     subject_names = {
-        s.id: {"code": s.code, "name": s.name}
+        s.id: {"code": s.code, "name": s.name, "subject_type": s.subject_type}
         for s in Subject.objects.filter(
             id__in={sid for (sid, _b) in s_counts.keys()}
         )
@@ -198,11 +205,13 @@ def student_report(user, f, limit=3000):
             present = p_counts.get((student.id, subject_id), 0)
             present_total += present
             slots_total += classes
-            meta = subject_names.get(subject_id, {"code": "?", "name": ""})
+            meta = subject_names.get(
+                subject_id, {"code": "?", "name": "", "subject_type": ""})
             subjects.append({
                 "subject_id": subject_id,
                 "code": meta["code"],
                 "name": meta["name"],
+                "subject_type": meta["subject_type"],
                 "held": classes,
                 "attended": present,
                 "percentage": pct(present, classes),
@@ -239,6 +248,7 @@ def subject_report(user, f):
             "subject_id": s.subject_id,
             "code": s.subject.code,
             "name": s.subject.name,
+            "subject_type": s.subject.subject_type,
             "semester": s.subject.semester,
             "department": s.subject.department.name,
             "batch": s.batch.label,
@@ -488,6 +498,7 @@ def student_detail(user, f, student):
             "subject_id": subject_id,
             "code": subj.code,
             "name": subj.name,
+            "subject_type": subj.subject_type,
             "held": classes,
             "attended": attended,
             "missed": max(classes - attended, 0),
@@ -535,6 +546,7 @@ def student_detail(user, f, student):
             "time": timezone.localtime(s.created_at).strftime("%H:%M"),
             "subject": s.subject.code,
             "subject_name": s.subject.name,
+            "subject_type": s.subject.subject_type,
             "teacher": s.teacher.full_name or s.teacher.email,
             "status": "PRESENT" if rec else "ABSENT",
             "marked_at": timezone.localtime(rec.marked_at).strftime("%H:%M:%S") if rec else "",

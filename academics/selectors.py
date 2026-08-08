@@ -15,7 +15,14 @@ from django.db.models import Q
 
 from accounts.models import User
 
-from .models import Batch, Department, Enrollment, Subject, TeacherAssignment
+from .models import (
+    Batch,
+    Department,
+    Enrollment,
+    Subject,
+    SubjectType,
+    TeacherAssignment,
+)
 
 
 def departments_for(user):
@@ -51,6 +58,35 @@ def subjects_for(user):
             return Subject.objects.none()
         return Subject.objects.filter(enrollments__student=profile, enrollments__is_active=True).distinct()
     return Subject.objects.none()
+
+
+def subject_type_options():
+    """
+    The type list every filter dropdown offers, in the declared order.
+
+    One function rather than a literal in nine templates: the day a fourth type
+    is added, a missed template would silently offer a filter that can never
+    match anything.
+    """
+    return [{"value": value, "label": label} for value, label in SubjectType.choices]
+
+
+def grouped_subjects(subjects):
+    """
+    Subjects bundled into their type, ready for <optgroup>.
+
+    Grouped here rather than in each template because a dropdown that groups by
+    type and a filter that filters by type have to agree about both the
+    categories and their order, and there is no reason for that agreement to be
+    re-derived per page. Empty types are dropped — an optgroup with nothing
+    under it is just a heading nobody can use.
+    """
+    buckets = {value: [] for value, _ in SubjectType.choices}
+    labels = dict(SubjectType.choices)
+    for subject in subjects:
+        buckets.setdefault(subject.subject_type, []).append(subject)
+    return [{"value": value, "label": labels.get(value, value), "subjects": items}
+            for value, items in buckets.items() if items]
 
 
 def batches_for(user, include_inactive=False):
