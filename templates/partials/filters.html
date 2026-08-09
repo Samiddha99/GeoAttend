@@ -37,6 +37,13 @@
       </div>
       {% endif %}
       <div class="col-6 col-md-2">
+        <label class="form-label mb-1">Degree</label>
+        <select class="form-select form-select-sm" name="degree" id="f-degree">
+          <option value="">All degrees</option>
+          {% for d in degrees %}<option value="{{ d.value }}">{{ d.label }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="col-6 col-md-2">
         <label class="form-label mb-1">Subject type</label>
         <select class="form-select form-select-sm" name="subject_type" id="f-subject-type">
           <option value="">All types</option>
@@ -47,7 +54,7 @@
         <label class="form-label mb-1">Subject</label>
         <select class="form-select form-select-sm" name="subject" id="f-subject">
           <option value="">All subjects</option>
-          {% include "partials/subject_options.html" with groups=subjects|by_subject_type %}
+          {% include "partials/subject_options.html" with groups=subjects|grouped_for_select %}
         </select>
       </div>
       {% if teachers %}

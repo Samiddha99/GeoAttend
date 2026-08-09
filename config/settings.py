@@ -337,7 +337,7 @@ ATTENDANCE = {
     # submit. Test on a phone. If you must use a laptop, set
     # ATTENDANCE_MAX_GPS_ACCURACY_M high *in your local .env only*;
     # `manage.py check` will warn if a loose value is still in place.
-    "MAX_GPS_ACCURACY_M": env_int("ATTENDANCE_MAX_GPS_ACCURACY_M", 100),
+    "MAX_GPS_ACCURACY_M": env_int("ATTENDANCE_MAX_GPS_ACCURACY_M", 20),
     # one device per student (anti proxy-attendance) — blocks *marking*
     "ENFORCE_DEVICE_LOCK": env_bool("ATTENDANCE_ENFORCE_DEVICE_LOCK", True),
     # ...and blocks *signing in* from an unrecognised device.  Stricter, and the

@@ -23,11 +23,12 @@
     <option value="">All departments</option>
     {% for d in filter_departments %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}
   </select>
+  {% include "partials/subject_degree_filter.html" with id="f-degree" %}
   {% include "partials/subject_type_filter.html" with id="f-subject-type" %}
   <select class="form-select form-select-sm" id="f-subject" style="max-width:240px"
-          data-all='[{% for s in filter_subjects %}{"id":"{{ s.id }}","code":"{{ s.code|escapejs }}","name":"{{ s.name|escapejs }}","department_id":"{{ s.department_id }}","semester":"{{ s.semester }}","subject_type":"{{ s.subject_type }}"}{% if not forloop.last %},{% endif %}{% endfor %}]'>
+          data-all='[{% for s in filter_subjects %}{"id":"{{ s.id }}","code":"{{ s.code|escapejs }}","name":"{{ s.name|escapejs }}","department_id":"{{ s.department_id }}","semester":"{{ s.semester }}","subject_type":"{{ s.subject_type }}","degree":"{{ s.degree }}"}{% if not forloop.last %},{% endif %}{% endfor %}]'>
     <option value="">All subjects</option>
-    {% include "partials/subject_options.html" with groups=filter_subjects|by_subject_type %}
+    {% include "partials/subject_options.html" with groups=filter_subjects|grouped_for_select %}
   </select>
   <select class="form-select form-select-sm {% if is_student %}d-none{% endif %}"
           id="f-status" style="max-width:180px">
@@ -252,13 +253,15 @@ $(function(){
   const ALL_SUBJECTS = JSON.parse($("#f-subject").attr("data-all") || "[]");
 
   function fillSubjectOptions(){
-    const d = $("#f-dept").val(), kind = $("#f-subject-type").val();
+    const d = $("#f-dept").val(), kind = $("#f-subject-type").val(),
+          deg = $("#f-degree").val();
     const keep = $("#f-subject").val();
     // Rebuilt rather than hidden: this list is already being reassembled for
     // the department filter, so the type is just one more predicate — and a
     // rebuilt list cannot leave a stale empty <optgroup> behind.
     const subs = ALL_SUBJECTS.filter(s =>
-      (!d || s.department_id == d) && (!kind || s.subject_type === kind));
+      (!d || s.department_id == d) && (!kind || s.subject_type === kind) &&
+      (!deg || s.degree === deg));
     $("#f-subject").html('<option value="">All subjects</option>'+
       GA.subjectOptions(subs, {all:false}));
     // Keep the chosen subject selected if it survived the narrowing.
@@ -267,7 +270,7 @@ $(function(){
 
   function applyFilters(){
     const d = $("#f-dept").val(), sid = $("#f-subject").val(), st = $("#f-status").val(),
-          kind = $("#f-subject-type").val();
+          kind = $("#f-subject-type").val(), deg = $("#f-degree").val();
     const view = rows.filter(function(r){
       if(d && r.department_id != d) return false;
       // Subject match is against the teacher's live allocations, so a teacher
@@ -276,6 +279,7 @@ $(function(){
       // Same rule one level up: teachers who take at least one subject of
       // this type.
       if(kind && !(r.assignments||[]).some(a=>a.subject_type === kind)) return false;
+      if(deg && !(r.assignments||[]).some(a=>a.degree === deg)) return false;
       if(st === "deactivated") return !r.is_active;
       if(st === "unassigned")  return !(r.assignments||[]).length;
       // Activated/Invited describe registration, which is independent of being
@@ -313,10 +317,10 @@ $(function(){
 
   // Filtering is client-side: the rows are already loaded, so re-filtering is
   // instant and does not cost a round trip.
-  $("#f-dept, #f-subject-type").on("change", function(){ fillSubjectOptions(); applyFilters(); });
+  $("#f-dept, #f-subject-type, #f-degree").on("change", function(){ fillSubjectOptions(); applyFilters(); });
   $("#f-subject, #f-status").on("change", applyFilters);
   $("#btn-reset-filters").on("click", function(){
-    $("#f-dept, #f-subject, #f-subject-type, #f-status").val("");
+    $("#f-dept, #f-subject, #f-subject-type, #f-degree, #f-status").val("");
     $("#search").val("").trigger("input");
     fillSubjectOptions(); applyFilters();
   });

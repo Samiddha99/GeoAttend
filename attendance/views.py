@@ -10,7 +10,13 @@ from django.utils import timezone
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.decorators.http import require_GET, require_POST
 
-from academics.models import StudentProfile, Subject, SubjectType, TeacherAssignment
+from academics.models import (
+    Degree,
+    StudentProfile,
+    Subject,
+    SubjectType,
+    TeacherAssignment,
+)
 from academics.selectors import (
     batches_for,
     departments_for,
@@ -161,6 +167,7 @@ def api_batch_subjects(request, batch_id):
             "code": s.code,
             "name": s.name,
             "subject_type": s.subject_type,
+            "degree": s.degree,
             "semester": s.semester,
             "enrolled": enrolled_students(s, batch).count(),
         })
@@ -368,6 +375,9 @@ def api_sessions(request):
     subject_type = (request.GET.get("subject_type") or "").strip().upper()
     if subject_type in SubjectType.values:
         qs = qs.filter(subject__subject_type=subject_type)
+    degree = (request.GET.get("degree") or "").strip().upper()
+    if degree in Degree.values:
+        qs = qs.filter(subject__degree=degree)
     status = request.GET.get("status")
     if status == "OPEN":
         qs = qs.filter(status=AttendanceSession.Status.OPEN, expires_at__gt=timezone.now())
@@ -379,6 +389,7 @@ def api_sessions(request):
         "subject": s.subject.code,
         "subject_name": s.subject.name,
         "subject_type": s.subject.subject_type,
+        "degree": s.subject.degree,
         "batch": s.batch.label,
         "teacher": s.teacher.full_name or s.teacher.email,
         "expected": s.expected_count,
@@ -561,6 +572,7 @@ def _reason_row(r, *, for_reviewer=False):
         "subject": r.session.subject.code,
         "subject_name": r.session.subject.name,
         "subject_type": r.session.subject.subject_type,
+        "degree": r.session.subject.degree,
         "batch": r.session.batch.label,
         "reason": r.reason,
         "status": r.status,
@@ -781,6 +793,7 @@ def _planned_row(p, *, for_reviewer=False, only_subjects=None):
             "subject": d.subject.code,
             "subject_name": d.subject.name,
             "subject_type": d.subject.subject_type,
+            "degree": d.subject.degree,
             "status": d.status,
             "status_label": d.get_status_display(),
             "remark": d.review_remark,

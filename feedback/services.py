@@ -209,6 +209,7 @@ def student_row(recipient, response=None):
         "subject": session.subject.code,
         "subject_name": session.subject.name,
         "subject_type": session.subject.subject_type,
+        "degree": session.subject.degree,
         "teacher": session.teacher.full_name or session.teacher.email,
         "batch": session.batch.label,
         "date": session.session_date.strftime("%d %b %Y"),
@@ -352,6 +353,7 @@ def remarks_from(forms):
                 "date_iso": form.session.session_date.isoformat(),
                 "subject": form.session.subject.code,
                 "subject_type": form.session.subject.subject_type,
+                "degree": form.session.subject.degree,
                 "teacher": (form.session.teacher.full_name
                             or form.session.teacher.email),
                 "batch": form.session.batch.label,
@@ -473,7 +475,7 @@ def filtered_forms(user, params):
     """
     from core.utils import clean_object_id, parse_date
 
-    from academics.models import SubjectType
+    from academics.models import Degree, SubjectType
 
     qs = visible_forms(user).prefetch_related("responses")
     for field, param in (("session__subject_id", "subject"),
@@ -490,6 +492,9 @@ def filtered_forms(user, params):
     subject_type = (params.get("subject_type") or "").strip().upper()
     if subject_type in SubjectType.values:
         qs = qs.filter(session__subject__subject_type=subject_type)
+    degree = (params.get("degree") or "").strip().upper()
+    if degree in Degree.values:
+        qs = qs.filter(session__subject__degree=degree)
 
     # A single date and a range are the same filter with the ends collapsed.
     on = parse_date(params.get("date"))

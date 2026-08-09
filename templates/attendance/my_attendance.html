@@ -33,7 +33,7 @@ $(function(){
     GA.table("#t1",{perPage:6, rows:d.subjects, empty:"No classes yet.", columns:[
       {key:"code",label:"Code",render:v=>'<span class="ga-pill pill-violet">'+GA.esc(v)+'</span>'},
       {key:"name",label:"Subject"},
-      GA.subjectTypeCol(),
+      GA.degreeCol(),GA.subjectTypeCol(),
       {key:"held",label:"Held",className:"text-center"},
       {key:"attended",label:"Present",className:"text-center",
        csv:(v,r)=>r.manual ? v+" ("+r.manual+" by teacher)" : v,
@@ -45,7 +45,7 @@ $(function(){
     GA.table("#t2",{perPage:15, rows:d.recent, empty:"Nothing here yet.", columns:[
       {key:"date",label:"Date"},{key:"time",label:"Time"},
       {key:"subject",label:"Subject",render:v=>'<span class="ga-pill pill-violet">'+GA.esc(v)+'</span>'},
-      {key:"subject_name",label:"Name"},GA.subjectTypeCol(),{key:"teacher",label:"Teacher"},
+      {key:"subject_name",label:"Name"},GA.degreeCol(),GA.subjectTypeCol(),{key:"teacher",label:"Teacher"},
       {key:"status",label:"Status",render:(v,r)=>GA.absenceCell(r)},
       {key:"marked_at",label:"Marked at"},
       {key:"distance",label:"Distance",render:v=> v==null?'—':v+' m'}

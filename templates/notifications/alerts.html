@@ -51,15 +51,16 @@
         </div>
 
         <!--
-          No subject-type filter here: this picks exactly one subject to alert
-          on, and the dropdown is already grouped by type. A second control
-          that only hides options would be a filter on a filter.
+          No degree or subject-type filter here: this picks exactly one subject
+          to alert on, and the dropdown is already grouped by degree and type.
+          A second control that only hides options would be a filter on a
+          filter.
         -->
         <div class="mb-3 d-none" id="subject-wrap">
           <label class="form-label">Subject *</label>
           <select class="form-select" id="f-subject">
             <option value="">Choose a subject…</option>
-            {% include "partials/subject_options.html" with groups=subjects|by_subject_type %}
+            {% include "partials/subject_options.html" with groups=subjects|grouped_for_select %}
           </select>
         </div>
 
@@ -624,7 +625,7 @@ $(function(){
           { key:"when", label:"When" },
           { key:"scope", label:"Type" },
           { key:"subject", label:"Subject" },
-          GA.subjectTypeCol(),
+          GA.degreeCol(),GA.subjectTypeCol(),
           { key:"threshold", label:"Below", render:v=>v + "%" },
           { key:"range", label:"Period" },
           { key:"by", label:"Sent by" },

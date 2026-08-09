@@ -3,7 +3,7 @@ from django.conf import settings
 
 def site(request):
     """Expose a few globals to every template."""
-    from academics.selectors import subject_type_options
+    from academics.selectors import degree_options, subject_type_options
 
     user = getattr(request, "user", None)
     return {
@@ -15,6 +15,7 @@ def site(request):
         # chances to forget, and the symptom of forgetting — a filter with no
         # options — is easy to miss in review.
         "subject_types": subject_type_options(),
+        "degrees": degree_options(),
         # Whose record a guardian is looking at, and who else they could pick.
         # A global for the same reason as the types above: the bar appears on
         # every page a guardian can reach, and a view that forgot to supply it

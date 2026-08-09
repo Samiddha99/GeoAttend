@@ -81,10 +81,32 @@ class SubjectType(models.TextChoices):
     OTHER = "OTHER", "Other"
 
 
+class Degree(models.TextChoices):
+    """
+    The programme a subject belongs to.
+
+    Declared shortest-to-longest rather than alphabetically, because that is
+    the order the dropdowns and filters read in and the order is load-bearing:
+    grouping is done in Python against `Degree.choices`, never by sorting the
+    stored codes (which would give BACHELOR, DIPLOMA, MASTERS).
+    """
+
+    DIPLOMA = "DIPLOMA", "Diploma"
+    BACHELOR = "BACHELOR", "Bachelor"
+    MASTERS = "MASTERS", "Masters"
+
+
 class Subject(models.Model):
     department = models.ForeignKey(Department, on_delete=models.CASCADE, related_name="subjects")
     code = models.CharField(max_length=20)
     name = models.CharField(max_length=150)
+    # Defaulted for the same reason as `subject_type`: every subject that
+    # already exists predates this field, and Bachelor is the honest backfill
+    # for an undergraduate-first institute. The *form* still makes it explicit.
+    degree = models.CharField(
+        max_length=12, choices=Degree.choices, default=Degree.BACHELOR,
+        db_index=True, verbose_name="Degree",
+    )
     # Defaulted rather than required at the database level: every subject that
     # already exists predates this field and is a lecture course, so Theory is
     # the honest backfill. The *form* still makes the choice explicit.

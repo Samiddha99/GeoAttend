@@ -15,6 +15,8 @@
       <input type="date" class="form-control form-control-sm" id="f-end" value="{{ default_end }}"></div>
     <div class="col-6 col-md-2"><label class="form-label mb-1">Batch</label>
       <select class="form-select form-select-sm" id="f-batch"><option value="">All</option></select></div>
+    <div class="col-6 col-md-2"><label class="form-label mb-1">Degree</label>
+      {% include "partials/subject_degree_filter.html" with id="f-degree" width="100%" %}</div>
     <div class="col-6 col-md-2"><label class="form-label mb-1">Subject type</label>
       <select class="form-select form-select-sm" id="f-subject-type">
         <option value="">All types</option>
@@ -51,7 +53,7 @@ $(function(){
     { key:"time", label:"Time" },
     { key:"subject", label:"Subject", render:(v,r)=>
       '<div><span class="ga-pill pill-violet">'+GA.esc(v)+'</span> <span class="fw-600">'+GA.esc(r.subject_name)+'</span></div>' },
-    GA.subjectTypeCol(),
+    GA.degreeCol(),GA.subjectTypeCol(),
     { key:"batch", label:"Batch" },
     { key:"teacher", label:"Teacher" },
     { key:"expected", label:"Enrolled", className:"text-center" },
@@ -77,7 +79,7 @@ $(function(){
     return GA.get("{% url 'attendance:api_sessions' %}", GA.query({
       start:$("#f-start").val(), end:$("#f-end").val(), batch:$("#f-batch").val(),
       subject:$("#f-subject").val(), subject_type:$("#f-subject-type").val(),
-      status:$("#f-status").val()
+      degree:$("#f-degree").val(), status:$("#f-status").val()
     })).done(function(res){
       const rows = res.data.rows;
       $("#count-pill").text(rows.length+" sessions");
@@ -89,8 +91,9 @@ $(function(){
   }
   $("#btn-apply").on("click", function(){ GA.spin(this, load()); });
   $("#f-status, #f-batch, #f-subject").on("change", load);
-  $("#f-subject-type").on("change", function(){
-    GA.narrowSubjectSelect("#f-subject", $(this).val());
+  $("#f-subject-type, #f-degree").on("change", function(){
+    GA.narrowSubjectSelect("#f-subject", $("#f-subject-type").val(),
+                           $("#f-degree").val());
     load();
   });
   GA.get("{% url 'academics:api_lookups' %}").done(function(res){

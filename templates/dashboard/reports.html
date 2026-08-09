@@ -183,7 +183,7 @@ $(function(){
       GA.table("#tbl-subjects",{ csv:false, perPage:12, rows:rows, empty:"No classes conducted.", columns:[
         { key:"code", label:"Code", render:v=>'<span class="ga-pill pill-violet">'+GA.esc(v)+'</span>' },
         { key:"name", label:"Subject" },
-        GA.subjectTypeCol(),
+        GA.degreeCol(),GA.subjectTypeCol(),
         { key:"batch", label:"Batch" },
         { key:"semester", label:"Sem", className:"text-center" },
         { key:"classes", label:"Classes held", className:"text-center" },

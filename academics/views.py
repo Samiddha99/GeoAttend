@@ -28,6 +28,7 @@ from .importer import (
 )
 from .models import (
     Batch,
+    Degree,
     Department,
     Enrollment,
     ImportJob,
@@ -348,6 +349,9 @@ def api_subjects(request):
     subject_type = (request.GET.get("subject_type") or "").strip().upper()
     if subject_type in SubjectType.values:
         qs = qs.filter(subject_type=subject_type)
+    degree = (request.GET.get("degree") or "").strip().upper()
+    if degree in Degree.values:
+        qs = qs.filter(degree=degree)
     qs = qs.annotate(
         teacher_count=Count(
             "assignments__teacher",
@@ -364,6 +368,8 @@ def api_subjects(request):
         "id": s.id, "code": s.code, "name": s.name, "semester": s.semester,
         "subject_type": s.subject_type,
         "subject_type_label": s.get_subject_type_display(),
+        "degree": s.degree,
+        "degree_label": s.get_degree_display(),
         "credits": s.credits, "department": s.department.name,
         "department_id": s.department_id, "is_active": s.is_active,
         "teacher_count": s.teacher_count, "student_count": s.student_count,
@@ -487,6 +493,7 @@ def _assignment_rows(teacher):
         "subject_id": a.subject_id,
         "subject": f"{a.subject.code} — {a.subject.name}",
         "subject_type": a.subject.subject_type,
+        "degree": a.subject.degree,
         "batch_id": a.batch_id,
         "batch": a.batch.label,
     } for a in teacher.assignments.select_related("subject", "batch").filter(
@@ -743,6 +750,8 @@ def api_students(request):
         # table spans the institute while a teacher's lookups do not.
         "subject_types": {e.subject.code: e.subject.subject_type
                           for e in s.enrollments.all()},
+        "subject_degrees": {e.subject.code: e.subject.degree
+                            for e in s.enrollments.all()},
         "status": "active" if s.user.registration_completed else "invited",
         "is_active": s.is_active and s.user.is_active,
         "device_bound": bool(s.user.device_id),
@@ -1051,6 +1060,7 @@ def api_lookups(request):
                for b in batches_for(user).select_related("department")]
     subjects = [{"id": s.id, "code": s.code, "name": s.name,
                  "department_id": s.department_id, "subject_type": s.subject_type,
+                 "degree": s.degree,
                  "semester": s.semester}
                 for s in subjects_for(user)]
     teachers = []
@@ -1062,4 +1072,5 @@ def api_lookups(request):
         # Sent with the lookups so a dropdown built in the browser groups by
         # the same list, in the same order, as one rendered server-side.
         "subject_types": [{"value": v, "label": l} for v, l in SubjectType.choices],
+        "degrees": [{"value": v, "label": l} for v, l in Degree.choices],
     })

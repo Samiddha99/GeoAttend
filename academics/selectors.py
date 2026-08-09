@@ -17,6 +17,7 @@ from accounts.models import User
 
 from .models import (
     Batch,
+    Degree,
     Department,
     Enrollment,
     Subject,
@@ -75,22 +76,58 @@ def subject_type_options():
     return [{"value": value, "label": label} for value, label in SubjectType.choices]
 
 
+def degree_options():
+    """The degree list every filter offers, in the declared order."""
+    return [{"value": value, "label": label} for value, label in Degree.choices]
+
+
 def grouped_subjects(subjects):
     """
-    Subjects bundled into their type, ready for <optgroup>.
+    Subjects bundled by degree, then by type, ready for <optgroup>.
 
-    Grouped here rather than in each template because a dropdown that groups by
-    type and a filter that filters by type have to agree about both the
-    categories and their order, and there is no reason for that agreement to be
-    re-derived per page. Empty types are dropped — an optgroup with nothing
-    under it is just a heading nobody can use.
+    **On the composite heading.** HTML `<optgroup>` cannot nest — the spec
+    allows exactly one level — so a genuine Degree ▸ Type tree is not available
+    in a native select. The compromise is one group per (degree, type) pair
+    labelled "Bachelor · Practical", emitted degree-first so the list still
+    reads as two levels: all the Bachelor groups together, types ordered within
+    each. The alternative, faking depth with indented disabled options, breaks
+    keyboard type-ahead and screen readers, which is a worse trade for a
+    control people use by typing a subject code.
+
+    Ordering comes from `Degree.choices` and `SubjectType.choices`, never from
+    sorting the stored codes — those would give BACHELOR, DIPLOMA, MASTERS and
+    OTHER, PRACTICAL, THEORY, neither of which is an order anyone wants.
+
+    Empty combinations are dropped: a department with no diploma labs gets no
+    "Diploma · Practical" heading rather than an empty one.
     """
-    buckets = {value: [] for value, _ in SubjectType.choices}
-    labels = dict(SubjectType.choices)
+    degree_labels = dict(Degree.choices)
+    type_labels = dict(SubjectType.choices)
+    buckets = {}
     for subject in subjects:
-        buckets.setdefault(subject.subject_type, []).append(subject)
-    return [{"value": value, "label": labels.get(value, value), "subjects": items}
-            for value, items in buckets.items() if items]
+        key = (subject.degree, subject.subject_type)
+        buckets.setdefault(key, []).append(subject)
+
+    # Declared order first, then anything with an unrecognised code, so a
+    # subject can never vanish from a dropdown because a new choice was added
+    # without updating this file.
+    known = [(d, t) for d, _ in Degree.choices for t, _ in SubjectType.choices]
+    order = known + [k for k in buckets if k not in set(known)]
+
+    groups = []
+    for key in order:
+        items = buckets.get(key)
+        if not items:
+            continue
+        degree, subject_type = key
+        groups.append({
+            "degree": degree,
+            "type": subject_type,
+            "label": "%s · %s" % (degree_labels.get(degree, degree),
+                                  type_labels.get(subject_type, subject_type)),
+            "subjects": items,
+        })
+    return groups
 
 
 def batches_for(user, include_inactive=False):

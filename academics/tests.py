@@ -8,14 +8,19 @@ from academics.forms import SubjectForm
 from academics.importer import import_students, read_rows
 from academics.models import (
     Batch,
+    Degree,
     Department,
     Enrollment,
     StudentProfile,
     Subject,
     SubjectType,
 )
-from academics.selectors import grouped_subjects, subject_type_options
-from academics.templatetags.academics_extras import by_subject_type
+from academics.selectors import (
+    degree_options,
+    grouped_subjects,
+    subject_type_options,
+)
+from academics.templatetags.academics_extras import grouped_for_select
 from accounts.models import Institute, User
 
 
@@ -23,11 +28,12 @@ HEADER = ("Name,Mobile Number,Email,Batch,Subjects Enrolled,"
           "Guardian Mobile,Guardian Name,Roll Number")
 
 
-def _subject(code, name, subject_type, department_id="D1", semester=3):
+def _subject(code, name, subject_type, department_id="D1", semester=3,
+             degree="BACHELOR"):
     """A stand-in with just the attributes the grouping helpers read."""
     return types.SimpleNamespace(
         id=code.lower(), code=code, name=name, subject_type=subject_type,
-        department_id=department_id, semester=semester)
+        department_id=department_id, semester=semester, degree=degree)
 
 
 class SubjectTypeTests(SimpleTestCase):
@@ -50,13 +56,15 @@ class SubjectTypeTests(SimpleTestCase):
             _subject("DSA-L", "DS Lab", "PRACTICAL"),
             _subject("DBMS", "Databases", "THEORY"),
         ])
-        self.assertEqual([g["label"] for g in groups], ["Theory", "Practical"])
+        # The heading is composite now that degree is part of the grouping.
+        self.assertEqual([g["label"] for g in groups],
+                         ["Bachelor · Theory", "Bachelor · Practical"])
         self.assertEqual([s.code for s in groups[0]["subjects"]], ["DSA", "DBMS"])
 
     def test_a_type_with_no_subjects_gets_no_heading(self):
         """An <optgroup> with nothing under it is a heading nobody can use."""
         groups = grouped_subjects([_subject("DSA", "Data Structures", "THEORY")])
-        self.assertEqual([g["label"] for g in groups], ["Theory"])
+        self.assertEqual([g["label"] for g in groups], ["Bachelor · Theory"])
 
     def test_a_subject_with_an_unknown_type_is_still_listed(self):
         """
@@ -67,10 +75,124 @@ class SubjectTypeTests(SimpleTestCase):
         groups = grouped_subjects([_subject("X", "Mystery", "TUTORIAL")])
         self.assertEqual([s.code for g in groups for s in g["subjects"]], ["X"])
 
+
+class DegreeGroupingTests(SimpleTestCase):
+    """Degree, and the two-level grouping it introduced."""
+
+    def test_the_three_degrees_are_offered_in_the_declared_order(self):
+        """
+        Shortest programme first. Sorting the stored codes would give
+        BACHELOR, DIPLOMA, MASTERS, which is alphabetical and meaningless.
+        """
+        self.assertEqual([d["value"] for d in degree_options()],
+                         ["DIPLOMA", "BACHELOR", "MASTERS"])
+
+    def test_groups_run_degree_first_then_type(self):
+        """
+        <optgroup> cannot nest, so the two levels are expressed as a composite
+        heading. What makes it read as a tree is the *order*: every Bachelor
+        group together, types in their declared order within each.
+        """
+        groups = grouped_subjects([
+            _subject("M-THESIS", "Thesis", "OTHER", degree="MASTERS"),
+            _subject("DSA-L", "DS Lab", "PRACTICAL", degree="BACHELOR"),
+            _subject("D-WORK", "Workshop", "PRACTICAL", degree="DIPLOMA"),
+            _subject("DSA", "Data Structures", "THEORY", degree="BACHELOR"),
+        ])
+        self.assertEqual([g["label"] for g in groups], [
+            "Diploma · Practical",
+            "Bachelor · Theory",
+            "Bachelor · Practical",
+            "Masters · Other",
+        ])
+
+    def test_each_group_carries_both_codes_for_the_client_side_narrowing(self):
+        """
+        The toolbars hide whole optgroups by degree and type without going back
+        to the server, so both codes have to travel with the group.
+        """
+        group = grouped_subjects([_subject("DSA", "D", "THEORY")])[0]
+        self.assertEqual(group["degree"], "BACHELOR")
+        self.assertEqual(group["type"], "THEORY")
+
+    def test_an_unknown_degree_still_appears(self):
+        groups = grouped_subjects([_subject("X", "Mystery", "THEORY",
+                                            degree="DOCTORATE")])
+        self.assertEqual([s.code for g in groups for s in g["subjects"]], ["X"])
+
+    def test_empty_combinations_are_dropped(self):
+        """A department with no diploma labs gets no Diploma · Practical row."""
+        groups = grouped_subjects([
+            _subject("DSA", "D", "THEORY", degree="BACHELOR"),
+            _subject("M1", "M", "THEORY", degree="MASTERS"),
+        ])
+        self.assertEqual(len(groups), 2)
+        self.assertNotIn("Practical", " ".join(g["label"] for g in groups))
+
+
+class SubjectOptionsRenderTests(SimpleTestCase):
+    """
+    What the dropdown actually emits.
+
+    The same list is built twice — here by Django, and in the browser by
+    `GA.subjectOptions` for dropdowns filled over AJAX. They have to agree on
+    the heading text, the order and the data- attributes, or a filter bar
+    behaves differently depending on how its options arrived.
+    """
+
+    def _render(self, subjects):
+        from django.template.loader import render_to_string
+
+        return render_to_string("partials/subject_options.html",
+                                {"groups": grouped_subjects(subjects)})
+
+    def test_the_headings_and_their_order(self):
+        import re
+
+        html = self._render([
+            _subject("M1", "Thesis", "OTHER", degree="MASTERS"),
+            _subject("B2", "DS Lab", "PRACTICAL", degree="BACHELOR"),
+            _subject("D3", "Workshop", "PRACTICAL", degree="DIPLOMA"),
+            _subject("B1", "Data Structures", "THEORY", degree="BACHELOR"),
+        ])
+        self.assertEqual(re.findall(r'<optgroup label="([^"]+)"', html), [
+            "Diploma · Practical",
+            "Bachelor · Theory",
+            "Bachelor · Practical",
+            "Masters · Other",
+        ])
+
+    def test_each_option_carries_what_the_toolbars_narrow_on(self):
+        html = self._render([_subject("DSA", "Data Structures", "THEORY")])
+        for attribute in ('data-dept="D1"', 'data-sem="3"',
+                          'data-type="THEORY"', 'data-degree="BACHELOR"'):
+            self.assertIn(attribute, html)
+
+
+class DegreeFilterParsingTests(SimpleTestCase):
+    def _parse(self, **params):
+        from dashboard.filters import ReportFilters
+
+        return ReportFilters.from_request(types.SimpleNamespace(GET=params))
+
+    def test_it_reads_a_degree(self):
+        self.assertEqual(self._parse(degree="MASTERS").degree, "MASTERS")
+
+    def test_case_and_spacing_are_forgiven(self):
+        self.assertEqual(self._parse(degree=" masters ").degree, "MASTERS")
+
+    def test_an_unknown_degree_means_no_filter_rather_than_no_results(self):
+        self.assertIsNone(self._parse(degree="PHD").degree)
+        self.assertIsNone(self._parse(degree="").degree)
+        self.assertIsNone(self._parse().degree)
+
+    def test_it_travels_with_the_other_filters(self):
+        self.assertIn("degree", self._parse(degree="DIPLOMA").as_dict())
+
     def test_the_template_filter_survives_a_view_that_passed_nothing(self):
         """A missing `subjects` should render an empty dropdown, not a 500."""
-        self.assertEqual(by_subject_type(None), [])
-        self.assertEqual(by_subject_type([]), [])
+        self.assertEqual(grouped_for_select(None), [])
+        self.assertEqual(grouped_for_select([]), [])
 
 
 class SubjectFormTypeTests(SimpleTestCase):
@@ -78,7 +200,8 @@ class SubjectFormTypeTests(SimpleTestCase):
 
     def _post(self, **overrides):
         data = {"code": "DSA", "name": "Data Structures", "semester": "3",
-                "credits": "4", "is_active": "on", "subject_type": "THEORY"}
+                "credits": "4", "is_active": "on", "subject_type": "THEORY",
+                "degree": "BACHELOR"}
         data.update(overrides)
         return SubjectForm(data)
 
@@ -107,6 +230,21 @@ class SubjectFormTypeTests(SimpleTestCase):
                             "semester": "3", "credits": "4", "is_active": "on"})
         self.assertFalse(form.is_valid())
         self.assertIn("subject_type", form.errors)
+        self.assertIn("degree", form.errors)
+
+    def test_every_degree_is_accepted_and_junk_is_not(self):
+        for value in Degree.values:
+            with self.subTest(degree=value):
+                form = self._post(degree=value)
+                self.assertTrue(form.is_valid(), form.errors)
+                self.assertEqual(form.cleaned_data["degree"], value)
+        self.assertFalse(self._post(degree="PHD").is_valid())
+        self.assertFalse(self._post(degree="bachelor").is_valid())
+
+    def test_the_degree_field_has_no_blank_option(self):
+        choices = SubjectForm().fields["degree"].choices
+        self.assertEqual([value for value, _ in choices],
+                         ["DIPLOMA", "BACHELOR", "MASTERS"])
 
 
 class SubjectTypeFilterParsingTests(SimpleTestCase):

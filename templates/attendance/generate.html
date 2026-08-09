@@ -224,7 +224,7 @@ $(function(){
         '<label class="d-flex align-items-center gap-2 p-2 rounded-3 subject-opt" style="cursor:pointer">'+
         '<input type="radio" name="subject" class="form-check-input mt-0" value="'+s.id+'">'+
         '<div class="flex-grow-1"><div class="fw-600">'+GA.esc(s.code)+' — '+GA.esc(s.name)+
-        ' '+GA.subjectType(s.subject_type)+'</div>'+
+        ' '+GA.degree(s.degree)+' '+GA.subjectType(s.subject_type)+'</div>'+
         '<small class="text-muted-2">Semester '+s.semester+' · '+s.enrolled+' enrolled</small></div>'+
         (s.enrolled ? '' : '<span class="ga-pill pill-amber">no students</span>')+'</label>').join(""));
       $('input[name=subject]').on("change", function(){

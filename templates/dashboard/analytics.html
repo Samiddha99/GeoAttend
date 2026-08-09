@@ -162,7 +162,7 @@ $(function(){
       GA.table("#tbl-subjects", { perPage:8, rows:res.data.rows, empty:"No classes conducted in this range.", columns:[
         { key:"code", label:"Code", render:v=>'<span class="ga-pill pill-violet">'+GA.esc(v)+'</span>' },
         { key:"name", label:"Subject", render:v=>'<span class="fw-600">'+GA.esc(v)+'</span>' },
-        GA.subjectTypeCol(),
+        GA.degreeCol(),GA.subjectTypeCol(),
         { key:"batch", label:"Batch" },
         { key:"classes", label:"Classes", className:"text-center" },
         { key:"enrolled", label:"Enrolled", className:"text-center" },

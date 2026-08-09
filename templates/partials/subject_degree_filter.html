@@ -1,0 +1,19 @@
+<!--
+  The Degree filter, for any toolbar that already has a Subject filter.
+
+  Include it with an `id` argument — see subjects.html for a live example.
+  (Written in prose on purpose: an include tag written out here would be a real
+  tag, not an illustration, and the file would include itself forever. HTML
+  comments hide things from the browser, not from Django.)
+
+  `degrees` comes from the site context processor, so no view has to remember
+  to supply it. Pass `width` to match the neighbouring controls.
+-->
+<select class="form-select form-select-sm ga-degree"
+        id="{{ id|default:'f-degree' }}"
+        {% if name %}name="{{ name }}"{% endif %}
+        style="max-width:{{ width|default:'160px' }}"
+        title="Diploma, bachelor or masters">
+  <option value="">All degrees</option>
+  {% for d in degrees %}<option value="{{ d.value }}">{{ d.label }}</option>{% endfor %}
+</select>

@@ -1,25 +1,27 @@
 <!--
-  The <option> list for a subject dropdown, grouped into Theory / Practical /
-  Other.
+  The <option> list for a subject dropdown, grouped by degree and then by type:
+  "Bachelor · Theory", "Bachelor · Practical", "Masters · Theory", and so on.
 
   Include it with a `groups` argument — see filters.html for a live example.
   (Written in prose on purpose: an include tag written out here would be a real
   tag, not an illustration, and the file would include itself forever. HTML
   comments hide things from the browser, not from Django.)
 
-  `groups` comes from academics.selectors.grouped_subjects(), which drops empty
-  types and keeps the declared order — so a department with no labs simply has
-  no Practical heading rather than an empty one.
+  `groups` comes from academics.selectors.grouped_subjects(). The heading is
+  composite because <optgroup> cannot nest — see that function for why the
+  alternative was rejected. Empty combinations are already dropped there, so a
+  department with no diploma labs gets no "Diploma · Practical" heading.
 
   The data- attributes are load-bearing: several toolbars narrow this list by
-  department, semester or type without going back to the server, and they read
-  them off the option.
+  department, semester, degree or type without going back to the server, and
+  they read them off the option.
 -->
 {% for g in groups %}
-<optgroup label="{{ g.label }}">
+<optgroup label="{{ g.label }}" data-degree="{{ g.degree }}" data-type="{{ g.type }}">
   {% for s in g.subjects %}
   <option value="{{ s.id }}" data-dept="{{ s.department_id }}"
-          data-sem="{{ s.semester }}" data-type="{{ s.subject_type }}">
+          data-sem="{{ s.semester }}" data-type="{{ s.subject_type }}"
+          data-degree="{{ s.degree }}">
     {{ s.code }} — {{ s.name }}</option>
   {% endfor %}
 </optgroup>

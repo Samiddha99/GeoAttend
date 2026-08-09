@@ -10,6 +10,7 @@
       batch: $("#f-batch").val(),
       subject: $("#f-subject").val(),
       subject_type: $("#f-subject-type").val(),
+      degree: $("#f-degree").val(),
       semester: $("#f-semester").val(),
       teacher: $("#f-teacher").val()
     });
@@ -26,18 +27,18 @@
     });
     $("#f-reset").on("click", function () {
       $("#filter-form")[0].reset();
-      $("#f-department, #f-batch, #f-subject, #f-subject-type, #f-semester, #f-teacher").val("");
+      $("#f-department, #f-batch, #f-subject, #f-subject-type, #f-degree, #f-semester, #f-teacher").val("");
       $("#f-subject option, #f-subject optgroup").show();   // undo any narrowing
       $(".ga-chip.quick").removeClass("sel").filter('[data-range="year"]').addClass("sel");
       GA.spin(this, onApply());
     });
 
-    // Department, semester and type all narrow the subject list; applying them
-    // together is what makes "the semester 3 CSE practicals" a usable set of
-    // filters.
+    // Department, semester, degree and type all narrow the subject list;
+    // applying them together is what makes "the semester 3 CSE bachelor
+    // practicals" a usable set of filters.
     function narrowSubjects() {
       const d = $("#f-department").val(), sem = $("#f-semester").val(),
-            type = $("#f-subject-type").val();
+            type = $("#f-subject-type").val(), deg = $("#f-degree").val();
       $("#f-batch option").each(function () {
         const own = $(this).data("dept");
         $(this).toggle(!d || !own || String(own) === String(d));
@@ -51,10 +52,11 @@
       $("#f-subject option").each(function () {
         if (!$(this).val()) return;                      // keep "All subjects"
         const own = $(this).data("dept"), mine = $(this).data("sem"),
-              kind = $(this).data("type");
+              kind = $(this).data("type"), deg2 = $(this).data("degree");
         const show = (!d || !own || String(own) === String(d)) &&
                      (!sem || String(mine) === String(sem)) &&
-                     (!type || !kind || String(kind) === String(type));
+                     (!type || !kind || String(kind) === String(type)) &&
+                     (!deg || !deg2 || String(deg2) === String(deg));
         $(this).toggle(show);
         if (!show && $(this).is(":selected")) hidCurrent = true;
         const group = $(this).closest("optgroup").attr("label");
@@ -72,7 +74,7 @@
       narrowSubjects();
       onApply();
     });
-    $("#f-semester, #f-subject-type").on("change", function () {
+    $("#f-semester, #f-subject-type, #f-degree").on("change", function () {
       narrowSubjects();
       onApply();
     });

@@ -1244,6 +1244,46 @@ window.GA = (function ($) {
    * times. If a fourth type is ever added and this list is not updated, the
    * stored code is shown verbatim — wrong-looking, but never blank.
    */
+  /**
+   * Which programme a subject belongs to, as a pill.
+   *
+   * Same shape and same reasoning as SUBJECT_TYPES below: the labels live here
+   * rather than travelling with every row, because a table of 800 subjects
+   * would otherwise carry the same three strings 800 times. An unrecognised
+   * code renders verbatim — wrong-looking, but never blank.
+   */
+  var DEGREES = {
+    DIPLOMA: ["Diploma", "pill-grey"],
+    BACHELOR: ["Bachelor", "pill-green"],
+    MASTERS: ["Masters", "pill-violet"]
+  };
+
+  function degree(value) {
+    if (!value) return '<span class="text-muted-2">—</span>';
+    var known = DEGREES[value] || [value, "pill-grey"];
+    return '<span class="ga-pill ' + known[1] + '">' + esc(known[0]) + "</span>";
+  }
+
+  function degreeLabel(value) {
+    return (DEGREES[value] || [value])[0];
+  }
+
+  /**
+   * The Degree column, ready to splice into a table's column list.
+   *
+   * A function rather than a shared object: GA.table stores state on the
+   * column, so handing the same object to two tables makes them interfere.
+   */
+  function degreeCol(key) {
+    return {
+      key: key || "degree",
+      label: "Degree",
+      className: "text-center",
+      csv: function (v) { return degreeLabel(v); },
+      render: function (v) { return degree(v); }
+    };
+  }
+
   var SUBJECT_TYPES = {
     THEORY: ["Theory", "pill-blue"],
     PRACTICAL: ["Practical", "pill-amber"],
@@ -1273,10 +1313,17 @@ window.GA = (function ($) {
    */
   function subjectOptions(list, opts) {
     var o = $.extend({ all: "All subjects", label: null }, opts || {});
-    var order = Object.keys(SUBJECT_TYPES);
+    // Degree first, then type — the same order the server partial emits, so a
+    // dropdown filled by AJAX looks identical to one rendered by Django.
+    var order = [];
+    $.each(Object.keys(DEGREES), function (_i, d) {
+      $.each(Object.keys(SUBJECT_TYPES), function (_j, t) { order.push(d + "|" + t); });
+    });
     var buckets = {};
     $.each(list || [], function (_i, s) {
-      var key = s.subject_type || "OTHER";
+      var key = (s.degree || "BACHELOR") + "|" + (s.subject_type || "OTHER");
+      // An unrecognised combination still gets a group rather than vanishing
+      // from a list somebody is trying to pick from.
       if (order.indexOf(key) === -1) order.push(key);
       (buckets[key] = buckets[key] || []).push(s);
     });
@@ -1284,13 +1331,17 @@ window.GA = (function ($) {
     $.each(order, function (_i, key) {
       var items = buckets[key];
       if (!items || !items.length) return;
-      html += '<optgroup label="' + esc(subjectTypeLabel(key)) + '">';
+      var parts = key.split("|");
+      var heading = degreeLabel(parts[0]) + " · " + subjectTypeLabel(parts[1]);
+      html += '<optgroup label="' + esc(heading) + '"' +
+        ' data-degree="' + esc(parts[0]) + '" data-type="' + esc(parts[1]) + '">';
       $.each(items, function (_j, s) {
         var text = o.label ? o.label(s) : s.code + " — " + s.name;
         html += '<option value="' + esc(s.id) + '"' +
           ' data-dept="' + esc(s.department_id == null ? "" : s.department_id) + '"' +
           ' data-sem="' + esc(s.semester == null ? "" : s.semester) + '"' +
-          ' data-type="' + esc(key) + '">' + esc(text) + "</option>";
+          ' data-degree="' + esc(parts[0]) + '"' +
+          ' data-type="' + esc(parts[1]) + '">' + esc(text) + "</option>";
       });
       html += "</optgroup>";
     });
@@ -1305,13 +1356,15 @@ window.GA = (function ($) {
    * the selection if the narrowing hid whatever was chosen, so the dropdown
    * can never report a subject the user can no longer see.
    */
-  function narrowSubjectSelect(selector, type) {
+  function narrowSubjectSelect(selector, type, degreeValue) {
     var $sel = $(selector);
     var chosen = $sel.val();
     var stillThere = !chosen;          // "All subjects" always survives
     $sel.find("optgroup").each(function () {
-      var mine = $(this).find("option").first().data("type");
-      var show = !type || String(mine) === String(type);
+      var $first = $(this).find("option").first();
+      var mine = $first.data("type"), mineDegree = $first.data("degree");
+      var show = (!type || String(mine) === String(type)) &&
+                 (!degreeValue || String(mineDegree) === String(degreeValue));
       $(this).toggle(show);
       var $options = $(this).find("option");
       $options.toggle(show);
@@ -1433,6 +1486,7 @@ window.GA = (function ($) {
     attachmentList, attachField, attachCheck, attachForm, ATTACH,
     stars, feedbackBadge, reviewBadge, downloadCsv, csvText,
     subjectType, subjectTypeLabel, subjectTypeCol, subjectOptions,
-    narrowSubjectSelect, SUBJECT_TYPES
+    narrowSubjectSelect, SUBJECT_TYPES,
+    degree, degreeLabel, degreeCol, DEGREES
   };
 })(jQuery);

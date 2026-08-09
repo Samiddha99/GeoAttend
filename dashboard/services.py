@@ -64,6 +64,8 @@ def scoped_sessions(user, f=None):
         qs = qs.filter(subject_id=f.subject)
     if f.subject_type:
         qs = qs.filter(subject__subject_type=f.subject_type)
+    if f.degree:
+        qs = qs.filter(subject__degree=f.degree)
     if f.teacher:
         qs = qs.filter(teacher_id=f.teacher)
     if f.semester:
@@ -85,6 +87,12 @@ def scoped_students(user, f=None):
         # Same reading as the semester filter below: students taking at least
         # one subject of that type, since a student has no type of their own.
         qs = qs.filter(enrollments__subject__subject_type=f.subject_type,
+                       enrollments__is_active=True)
+    if f.degree:
+        # And the same again for degree — a student is not "in" a degree here,
+        # their subjects are. Keeping the three filters identical in shape is
+        # what stops them disagreeing about what a filtered list means.
+        qs = qs.filter(enrollments__subject__degree=f.degree,
                        enrollments__is_active=True)
     if f.semester:
         # A student is not "in" a semester — their subjects are. So this means
@@ -219,7 +227,8 @@ def student_report(user, f, limit=3000):
     m_counts = manual_counts(sessions)
 
     subject_names = {
-        s.id: {"code": s.code, "name": s.name, "subject_type": s.subject_type}
+        s.id: {"code": s.code, "name": s.name, "subject_type": s.subject_type,
+               "degree": s.degree}
         for s in Subject.objects.filter(
             id__in={sid for (sid, _b) in s_counts.keys()}
         )
@@ -243,12 +252,13 @@ def student_report(user, f, limit=3000):
             slots_total += classes
             manual_total += manual
             meta = subject_names.get(
-                subject_id, {"code": "?", "name": "", "subject_type": ""})
+                subject_id, {"code": "?", "name": "", "subject_type": "", "degree": ""})
             subjects.append({
                 "subject_id": subject_id,
                 "code": meta["code"],
                 "name": meta["name"],
                 "subject_type": meta["subject_type"],
+                "degree": meta["degree"],
                 "held": classes,
                 "attended": present,
                 "manual": manual,
@@ -289,6 +299,7 @@ def subject_report(user, f):
             "code": s.subject.code,
             "name": s.subject.name,
             "subject_type": s.subject.subject_type,
+            "degree": s.subject.degree,
             "semester": s.subject.semester,
             "department": s.subject.department.name,
             "batch": s.batch.label,
@@ -591,6 +602,7 @@ def student_detail(user, f, student):
             "code": subj.code,
             "name": subj.name,
             "subject_type": subj.subject_type,
+            "degree": subj.degree,
             "held": classes,
             "attended": attended,
             "manual": manual,
@@ -647,6 +659,7 @@ def student_detail(user, f, student):
             "subject": s.subject.code,
             "subject_name": s.subject.name,
             "subject_type": s.subject.subject_type,
+            "degree": s.subject.degree,
             "teacher": s.teacher.full_name or s.teacher.email,
             # The record's own status, not a flattened "PRESENT". A mark a
             # teacher entered by hand reads MANUAL, and collapsing the two here

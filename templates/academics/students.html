@@ -24,6 +24,7 @@
     {% for d in departments %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}
   </select>
   <select class="form-select form-select-sm" id="f-batch" style="max-width:200px"><option value="">All batches</option></select>
+  {% include "partials/subject_degree_filter.html" with id="f-degree" %}
   {% include "partials/subject_type_filter.html" with id="f-subject-type" %}
   <select class="form-select form-select-sm" id="f-subject" style="max-width:240px"><option value="">All subjects</option></select>
   <select class="form-select form-select-sm" id="f-status" style="max-width:170px">
@@ -273,7 +274,7 @@ $(function(){
   function applyFilters(){
     const d=$("#f-department").val(), b=$("#f-batch").val(),
           s=$("#f-subject").val(), st=$("#f-status").val(),
-          kind=$("#f-subject-type").val();
+          kind=$("#f-subject-type").val(), deg=$("#f-degree").val();
     {% if wide %}
     const code = s || null;                  // options are codes on this screen
     {% else %}
@@ -288,6 +289,9 @@ $(function(){
       // "Students taking at least one subject of this type" — a student has no
       // type of their own, and this is the same reading the reports use.
       (!kind || Object.values(r.subject_types||{}).indexOf(kind) > -1) &&
+      // Same reading as the type filter: students taking at least one subject
+      // of this degree.
+      (!deg || Object.values(r.subject_degrees||{}).indexOf(deg) > -1) &&
       (!code || (r.subjects||[]).indexOf(code) > -1));
     table.setRows(view);
     $("#count-pill").text(view.length + " students");
@@ -380,10 +384,11 @@ $(function(){
   }
 
   $("#btn-refresh").on("click", function(){ GA.spin(this, load()); });
-  $("#f-subject-type").on("change", function(){
-    GA.narrowSubjectSelect("#f-subject", $(this).val());
+  $("#f-subject-type, #f-degree").on("change", function(){
+    GA.narrowSubjectSelect("#f-subject", $("#f-subject-type").val(),
+                           $("#f-degree").val());
   });
-  $("#f-department, #f-batch, #f-subject, #f-subject-type, #f-status").on("change", function(){
+  $("#f-department, #f-batch, #f-subject, #f-subject-type, #f-degree, #f-status").on("change", function(){
     applyFilters();
     $("#btn-export").attr("href", "{% url 'academics:api_students_export' %}?" +
       {% if wide %}"scope=all&" +{% endif %}
@@ -516,12 +521,13 @@ $(function(){
     // build the lists from the rows on show so the filters can always reach
     // every row.
     {% if wide %}
-    const batches = {}, subjects = {}, kinds = {};
+    const batches = {}, subjects = {}, kinds = {}, degrees = {};
     rows.forEach(function(r){
       if(r.batch_id) batches[r.batch_id] = r.batch;
       (r.subjects||[]).forEach(c=>{
         subjects[c] = c;
         kinds[c] = (r.subject_types||{})[c] || kinds[c];
+        degrees[c] = (r.subject_degrees||{})[c] || degrees[c];
       });
     });
     const keepB = $("#f-batch").val(), keepS = $("#f-subject").val();
@@ -539,7 +545,8 @@ $(function(){
     */
     $("#f-subject").html(GA.subjectOptions(
       Object.keys(subjects).sort().map(c=>({id:c, code:c, name:subjects[c],
-                                            subject_type:kinds[c]})),
+                                            subject_type:kinds[c],
+                                            degree:degrees[c]})),
       {label:s=>s.code})).val(keepS);
     {% else %}
     $("#f-batch").append(lookups.batches.map(b=>'<option value="'+b.id+'">'+GA.esc(b.label)+'</option>').join(""));

@@ -279,6 +279,7 @@ def _campaign_dict(campaign):
         # Blank rather than a dash for an overall alert: the column renders a
         # pill, and a pill reading "—" looks like a type called "—".
         "subject_type": campaign.subject.subject_type if campaign.subject else "",
+        "degree": campaign.subject.degree if campaign.subject else "",
         "threshold": campaign.threshold,
         "range": f"{campaign.date_from:%d %b} – {campaign.date_to:%d %b %Y}",
         "by": campaign.created_by.get_full_name() if campaign.created_by else "—",
