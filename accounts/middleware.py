@@ -74,6 +74,51 @@ class ForceFaceEnrolmentMiddleware:
         return self.get_response(request)
 
 
+class GuardianChildMiddleware:
+    """
+    Resolve which child a guardian is looking at, once per request.
+
+    Hung on the user object rather than only on the request so that the
+    selectors — which take a `user`, not a `request` — can reach it through
+    `accounts.guardians.acting_profile` without every one of them growing a new
+    argument.
+
+    Resolved fresh each request on purpose. The session records *which* child
+    was chosen; whether that child is still reachable is recomputed from the
+    student table, so removing a number from a student record cuts the
+    guardian's access on their very next click rather than whenever their
+    session happens to expire.
+
+    A guardian whose children have all gone is signed out rather than left on a
+    dashboard with nothing in it.
+    """
+
+    SAFE_PREFIXES = ("/auth/", "/static/", "/media/", "/admin/")
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        from .guardians import active_child
+
+        user = getattr(request, "user", None)
+        if user is not None and getattr(user, "is_authenticated", False) \
+                and getattr(user, "is_guardian", False):
+            child = active_child(request)
+            user._acting_child = child
+            request.guardian_child = child
+            if child is None and not request.path.startswith(self.SAFE_PREFIXES):
+                if is_ajax(request):
+                    return fail(
+                        "Your number is no longer linked to a student. Please "
+                        "contact the institute.",
+                        status=403, code="NO_CHILDREN",
+                        data={"redirect": reverse("accounts:guardian_login")},
+                    )
+                return redirect(reverse("accounts:guardian_logout"))
+        return self.get_response(request)
+
+
 class ActivityTrackingMiddleware:
     """Stamp `last_seen` at most once a minute — cheap presence tracking."""
 

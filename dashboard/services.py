@@ -38,8 +38,10 @@ def scoped_sessions(user, f=None):
         qs = qs.filter(subject__department__in=departments_for(user))
     elif user.is_teacher:
         qs = qs.filter(teacher=user)
-    elif user.is_student:
-        profile = getattr(user, "student_profile", None)
+    elif user.is_student or user.is_guardian:
+        from accounts.guardians import acting_profile
+
+        profile = acting_profile(user)
         if profile is None or not profile.batch.is_active:
             return qs.none()
         qs = qs.filter(batch=profile.batch, subject__enrollments__student=profile,
@@ -117,6 +119,30 @@ def present_counts(sessions):
     return {(r["student_id"], r["session__subject_id"]): r["n"] for r in rows}
 
 
+def manual_counts(sessions):
+    """
+    {(student_id, subject_id): times a teacher marked them present}
+
+    A strict subset of `present_counts` — MANUAL is one of the two statuses
+    that count as present, never a third category. So a row's manual figure is
+    always ≤ its attended figure, and subtracting gives the marks the student
+    made themselves.
+
+    Kept as a separate query rather than folded into `present_counts` because
+    most callers want the total and only some want the split; one extra grouped
+    count is cheaper than making every caller carry a second dictionary it does
+    not read.
+    """
+    rows = (
+        AttendanceRecord.objects
+        .filter(session__in=sessions, status=AttendanceRecord.Status.MANUAL)
+        .order_by()
+        .values("student_id", "session__subject_id")
+        .annotate(n=Count("id"))
+    )
+    return {(r["student_id"], r["session__subject_id"]): r["n"] for r in rows}
+
+
 def enrollment_pairs(students, sessions=None, subject_filter=None):
     """[(student_id, subject_id)] for the students in scope."""
     qs = Enrollment.objects.filter(student__in=students, is_active=True)
@@ -133,11 +159,12 @@ def kpi_summary(user, f):
     students = scoped_students(user, f)
     s_counts = session_counts(sessions)
     p_counts = present_counts(sessions)
+    m_counts = manual_counts(sessions)
 
     student_ids = set(students.values_list("id", flat=True))
     student_batch = dict(students.values_list("id", "batch_id"))
 
-    total_slots = total_present = 0
+    total_slots = total_present = total_manual = 0
     per_student = defaultdict(lambda: [0, 0])  # id -> [present, slots]
     for student_id, subject_id in enrollment_pairs(students, subject_filter=f.subject):
         if student_id not in student_ids:
@@ -148,6 +175,7 @@ def kpi_summary(user, f):
         present = p_counts.get((student_id, subject_id), 0)
         total_slots += classes
         total_present += present
+        total_manual += m_counts.get((student_id, subject_id), 0)
         per_student[student_id][0] += present
         per_student[student_id][1] += classes
 
@@ -160,6 +188,12 @@ def kpi_summary(user, f):
         "subjects": sessions.values("subject_id").distinct().count(),
         "overall_percentage": pct(total_present, total_slots),
         "present_marks": total_present,
+        # How many of those present marks a teacher entered by hand, and what
+        # share of the present marks that is. The denominator is present marks,
+        # not possible marks: the question being answered is "how much of this
+        # attendance was self-marked", not "what fraction of the class".
+        "manual_marks": total_manual,
+        "manual_share": pct(total_manual, total_present),
         "possible_marks": total_slots,
         "classes_today": sessions.filter(session_date=today).count(),
         "open_now": AttendanceSession.objects.filter(
@@ -182,6 +216,7 @@ def student_report(user, f, limit=3000):
     student_list = list(students)
     s_counts = session_counts(sessions)
     p_counts = present_counts(sessions)
+    m_counts = manual_counts(sessions)
 
     subject_names = {
         s.id: {"code": s.code, "name": s.name, "subject_type": s.subject_type}
@@ -196,15 +231,17 @@ def student_report(user, f, limit=3000):
 
     rows = []
     for student in student_list:
-        present_total = slots_total = 0
+        present_total = slots_total = manual_total = 0
         subjects = []
         for subject_id in by_student.get(student.id, []):
             classes = s_counts.get((subject_id, student.batch_id), 0)
             if not classes:
                 continue
             present = p_counts.get((student.id, subject_id), 0)
+            manual = m_counts.get((student.id, subject_id), 0)
             present_total += present
             slots_total += classes
+            manual_total += manual
             meta = subject_names.get(
                 subject_id, {"code": "?", "name": "", "subject_type": ""})
             subjects.append({
@@ -214,6 +251,7 @@ def student_report(user, f, limit=3000):
                 "subject_type": meta["subject_type"],
                 "held": classes,
                 "attended": present,
+                "manual": manual,
                 "percentage": pct(present, classes),
             })
         subjects.sort(key=lambda x: x["code"])
@@ -228,6 +266,8 @@ def student_report(user, f, limit=3000):
             "department": student.department.name,
             "held": slots_total,
             "attended": present_total,
+            "manual": manual_total,
+            "manual_share": pct(manual_total, present_total),
             "percentage": pct(present_total, slots_total),
             "subjects": subjects,
             "status": "at-risk" if slots_total and pct(present_total, slots_total) < 75 else "ok",
@@ -256,6 +296,7 @@ def subject_report(user, f):
             "classes": 0,
             "enrolled": 0,
             "present_marks": 0,
+            "manual_marks": 0,
             "teachers": set(),
         })
         row["classes"] += 1
@@ -274,11 +315,27 @@ def subject_report(user, f):
             rows_map[key]["present_marks"] = m["n"]
             rows_map[key]["students_attended"] = m["uniq"]
 
+    # The same grouping again, narrowed to the marks a teacher entered. A
+    # second query rather than a conditional aggregate so it reads the same way
+    # as the one above and cannot drift from it.
+    manual = (
+        AttendanceRecord.objects
+        .filter(session__in=sessions, status=AttendanceRecord.Status.MANUAL)
+        .order_by()
+        .values("session__subject_id", "session__batch_id")
+        .annotate(n=Count("id"))
+    )
+    for m in manual:
+        key = (m["session__subject_id"], m["session__batch_id"])
+        if key in rows_map:
+            rows_map[key]["manual_marks"] = m["n"]
+
     rows = []
     for row in rows_map.values():
         possible = row["classes"] * row["enrolled"]
         row["students_attended"] = row.get("students_attended", 0)
         row["percentage"] = pct(row["present_marks"], possible)
+        row["manual_share"] = pct(row["manual_marks"], row["present_marks"])
         row["avg_present"] = round(row["present_marks"] / row["classes"], 1) if row["classes"] else 0
         row["teachers"] = ", ".join(sorted(row["teachers"]))
         rows.append(row)
@@ -353,7 +410,8 @@ def student_daily_trend(user, f, student):
 #  5. Comparisons
 # --------------------------------------------------------------------------- #
 def _group_percentage(sessions, group_field, label_map):
-    rows = defaultdict(lambda: {"classes": 0, "expected": 0, "present": 0})
+    rows = defaultdict(lambda: {"classes": 0, "expected": 0, "present": 0,
+                                "manual": 0})
     for s in sessions.order_by().values(group_field, "expected_count").annotate(n=Count("id")):
         key = s[group_field]
         rows[key]["classes"] += s["n"]
@@ -365,6 +423,16 @@ def _group_percentage(sessions, group_field, label_map):
         .annotate(n=Count("id"))
     ):
         rows[m[f"session__{group_field}"]]["present"] += m["n"]
+    # The same grouping narrowed to hand-entered marks, so a batch or
+    # department rollup can say how much of its attendance was typed in.
+    for m in (
+        AttendanceRecord.objects
+        .filter(session__in=sessions, status=AttendanceRecord.Status.MANUAL)
+        .order_by()
+        .values(f"session__{group_field}")
+        .annotate(n=Count("id"))
+    ):
+        rows[m[f"session__{group_field}"]]["manual"] += m["n"]
     out = []
     for key, v in rows.items():
         out.append({
@@ -373,6 +441,8 @@ def _group_percentage(sessions, group_field, label_map):
             "classes": v["classes"],
             "percentage": pct(v["present"], v["expected"]),
             "present": v["present"],
+            "manual": v["manual"],
+            "manual_share": pct(v["manual"], v["present"]),
         })
     out.sort(key=lambda r: -r["percentage"])
     return out
@@ -387,7 +457,8 @@ def batch_comparison(user, f):
 def department_comparison(user, f):
     sessions = scoped_sessions(user, f)
     labels = {d.id: d.name for d in Department.objects.all()}
-    rows = defaultdict(lambda: {"classes": 0, "expected": 0, "present": 0})
+    rows = defaultdict(lambda: {"classes": 0, "expected": 0, "present": 0,
+                                "manual": 0})
     for s in sessions.order_by().values(
         "subject__department_id", "expected_count"
     ).annotate(n=Count("id")):
@@ -401,9 +472,18 @@ def department_comparison(user, f):
         .annotate(n=Count("id"))
     ):
         rows[m["session__subject__department_id"]]["present"] += m["n"]
+    for m in (
+        AttendanceRecord.objects
+        .filter(session__in=sessions, status=AttendanceRecord.Status.MANUAL)
+        .order_by()
+        .values("session__subject__department_id")
+        .annotate(n=Count("id"))
+    ):
+        rows[m["session__subject__department_id"]]["manual"] += m["n"]
     out = [{
         "id": k, "label": labels.get(k, "—"), "classes": v["classes"],
         "percentage": pct(v["present"], v["expected"]), "present": v["present"],
+        "manual": v["manual"], "manual_share": pct(v["manual"], v["present"]),
     } for k, v in rows.items()]
     out.sort(key=lambda r: -r["percentage"])
     return out
@@ -411,7 +491,8 @@ def department_comparison(user, f):
 
 def teacher_activity(user, f):
     sessions = scoped_sessions(user, f).select_related("teacher")
-    rows = defaultdict(lambda: {"classes": 0, "expected": 0, "present": 0, "name": ""})
+    rows = defaultdict(lambda: {"classes": 0, "expected": 0, "present": 0,
+                                "manual": 0, "name": ""})
     for s in sessions:
         r = rows[s.teacher_id]
         r["name"] = s.teacher.full_name or s.teacher.email
@@ -422,9 +503,17 @@ def teacher_activity(user, f):
         .order_by().values("session__teacher_id").annotate(n=Count("id"))
     ):
         rows[m["session__teacher_id"]]["present"] += m["n"]
+    for m in (
+        AttendanceRecord.objects
+        .filter(session__in=sessions, status=AttendanceRecord.Status.MANUAL)
+        .order_by().values("session__teacher_id").annotate(n=Count("id"))
+    ):
+        rows[m["session__teacher_id"]]["manual"] += m["n"]
     out = [{
         "id": k, "label": v["name"], "classes": v["classes"],
         "percentage": pct(v["present"], v["expected"]),
+        "present": v["present"], "manual": v["manual"],
+        "manual_share": pct(v["manual"], v["present"]),
     } for k, v in rows.items()]
     out.sort(key=lambda r: -r["classes"])
     return out
@@ -483,17 +572,20 @@ def student_detail(user, f, student):
     sessions = sessions.filter(subject_id__in=subject_ids)
     s_counts = session_counts(sessions)
     p_counts = present_counts(sessions)
+    m_counts = manual_counts(sessions)
     subjects = {s.id: s for s in Subject.objects.filter(id__in=subject_ids)}
 
-    per_subject, held_total, att_total = [], 0, 0
+    per_subject, held_total, att_total, man_total = [], 0, 0, 0
     for subject_id in subject_ids:
         classes = s_counts.get((subject_id, student.batch_id), 0)
         attended = p_counts.get((student.id, subject_id), 0)
+        manual = m_counts.get((student.id, subject_id), 0)
         subj = subjects.get(subject_id)
         if subj is None:
             continue
         held_total += classes
         att_total += attended
+        man_total += manual
         per_subject.append({
             "subject_id": subject_id,
             "code": subj.code,
@@ -501,6 +593,7 @@ def student_detail(user, f, student):
             "subject_type": subj.subject_type,
             "held": classes,
             "attended": attended,
+            "manual": manual,
             "missed": max(classes - attended, 0),
             "percentage": pct(attended, classes),
         })
@@ -509,7 +602,9 @@ def student_detail(user, f, student):
     recent = []
     marked = {
         r.session_id: r
-        for r in AttendanceRecord.objects.filter(session__in=sessions, student=student)
+        # marked_by is joined because a MANUAL row now names who entered it.
+        for r in AttendanceRecord.objects.filter(
+            session__in=sessions, student=student).select_related("marked_by")
     }
     # One query for the whole history rather than one per absent row.
     reasons = {
@@ -539,7 +634,12 @@ def student_detail(user, f, student):
         # Nothing to explain if a planned absence already covers this class.
         can_explain = bool(
             absent and reason is None and decision is None and window_days > 0
-            and today <= s.session_date + dt.timedelta(days=window_days))
+            and today <= s.session_date + dt.timedelta(days=window_days)
+            # Never for a guardian: explaining an absence is the student's
+            # account of their own day. Cleared here rather than in the
+            # template because this flag is what turns the red Absent mark
+            # into a clickable "add a reason" control on three screens.
+            and not getattr(user, "is_guardian", False))
         recent.append({
             "session_id": s.id,
             "date": s.session_date.strftime("%d %b %Y"),
@@ -548,7 +648,12 @@ def student_detail(user, f, student):
             "subject_name": s.subject.name,
             "subject_type": s.subject.subject_type,
             "teacher": s.teacher.full_name or s.teacher.email,
-            "status": "PRESENT" if rec else "ABSENT",
+            # The record's own status, not a flattened "PRESENT". A mark a
+            # teacher entered by hand reads MANUAL, and collapsing the two here
+            # was hiding exactly the distinction this screen now has to show.
+            "status": rec.status if rec else "ABSENT",
+            "marked_by": (rec.marked_by.full_name or rec.marked_by.email)
+                         if rec and rec.marked_by_id else "",
             "marked_at": timezone.localtime(rec.marked_at).strftime("%H:%M:%S") if rec else "",
             "distance": round(rec.distance_m, 1) if rec and rec.distance_m is not None else None,
             "can_explain": can_explain,
@@ -588,6 +693,8 @@ def student_detail(user, f, student):
         },
         "overall": {
             "held": held_total, "attended": att_total,
+            "manual": man_total,
+            "manual_share": pct(man_total, att_total),
             "missed": max(held_total - att_total, 0),
             "percentage": pct(att_total, held_total),
         },

@@ -163,8 +163,18 @@ class StudentProfile(models.Model):
     guardian_name = models.CharField(max_length=150, blank=True)
     guardian_mobile = models.CharField(
         max_length=20, blank=True,
-        help_text="WhatsApp number used for low-attendance alerts.",
+        help_text="WhatsApp number used for alerts and for guardian sign-in.",
     )
+    # The same number in E.164, derived on save. Guardian sign-in looks a number
+    # up here rather than in `guardian_mobile`, because that column holds
+    # whatever the spreadsheet contained — "98765 43210", "09876543210" and
+    # "+91 98765 43210" are one number and must resolve to one guardian.
+    #
+    # Stored rather than computed per query so the lookup can use an index, and
+    # kept beside the original rather than replacing it so the UI still shows
+    # staff the number they typed.
+    guardian_mobile_e164 = models.CharField(
+        max_length=20, blank=True, db_index=True, editable=False)
     guardian_email = models.EmailField(blank=True)
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -178,6 +188,22 @@ class StudentProfile(models.Model):
 
     def __str__(self):
         return f"{self.user.full_name or self.user.email} ({self.batch.label})"
+
+    def save(self, *args, **kwargs):
+        # Derived here rather than in the form, so the importer, the admin and
+        # a shell script all keep it in step. A number that cannot be parsed
+        # leaves the column blank, which means "no guardian can sign in with
+        # this" — the safe reading.
+        from notifications.whatsapp import normalise_msisdn
+
+        number, error = normalise_msisdn(self.guardian_mobile)
+        self.guardian_mobile_e164 = "" if error else number
+        if "update_fields" in kwargs and kwargs["update_fields"] is not None:
+            fields = set(kwargs["update_fields"])
+            if "guardian_mobile" in fields:
+                fields.add("guardian_mobile_e164")
+                kwargs["update_fields"] = fields
+        super().save(*args, **kwargs)
 
     @property
     def name(self):

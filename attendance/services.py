@@ -44,6 +44,47 @@ class AttendanceError(Exception):
 # --------------------------------------------------------------------------- #
 #  Teacher side
 # --------------------------------------------------------------------------- #
+def session_limits():
+    """
+    The bounds on link validity and fence radius, read live.
+
+    Read from `settings` on every call rather than from the module-level CONF
+    snapshot. CONF is bound once at import, so `override_settings` — and any
+    runtime change — replaces the dict without CONF ever noticing, and a test
+    that lowers the ceiling would silently keep testing the old one.
+    """
+    conf = settings.ATTENDANCE
+    return {key: int(conf[key]) for key in (
+        "MIN_EXPIRY_MIN", "MAX_EXPIRY_MIN", "DEFAULT_EXPIRY_MIN",
+        "MIN_RADIUS_M", "MAX_RADIUS_M", "DEFAULT_RADIUS_M")}
+
+
+def _bounded(value, key, label, unit, code):
+    """
+    One number, checked against its configured range.
+
+    Refuses rather than clamps. Silently rounding 300 minutes down to 30 would
+    hand the teacher a link that behaves differently from what they asked for,
+    and they would only find out when it expired mid-lesson.
+
+    Anything unparseable is refused too: `int("")` raising a ValueError that
+    escapes as a 500 is not the message this deserves.
+    """
+    limits = session_limits()
+    low, high = limits[f"MIN_{key}"], limits[f"MAX_{key}"]
+    if value in (None, ""):
+        return limits[f"DEFAULT_{key}"]
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        raise AttendanceError(
+            f"{label} must be a whole number of {unit}.", code)
+    if not (low <= number <= high):
+        raise AttendanceError(
+            f"{label} must be between {low} and {high} {unit}.", code)
+    return number
+
+
 def create_session(*, teacher, subject, batch, latitude, longitude, accuracy=0,
                    minutes=None, radius=None, note=""):
     if not batch.is_active:
@@ -62,18 +103,8 @@ def create_session(*, teacher, subject, batch, latitude, longitude, accuracy=0,
             "NO_LOCATION",
         )
 
-    minutes = int(minutes or CONF["DEFAULT_EXPIRY_MIN"])
-    if not (CONF["MIN_EXPIRY_MIN"] <= minutes <= CONF["MAX_EXPIRY_MIN"]):
-        raise AttendanceError(
-            f"Validity must be between {CONF['MIN_EXPIRY_MIN']} and "
-            f"{CONF['MAX_EXPIRY_MIN']} minutes.", "BAD_EXPIRY",
-        )
-    radius = int(radius or CONF["DEFAULT_RADIUS_M"])
-    if not (CONF["MIN_RADIUS_M"] <= radius <= CONF["MAX_RADIUS_M"]):
-        raise AttendanceError(
-            f"Radius must be between {CONF['MIN_RADIUS_M']} and "
-            f"{CONF['MAX_RADIUS_M']} metres.", "BAD_RADIUS",
-        )
+    minutes = _bounded(minutes, "EXPIRY_MIN", "Validity", "minutes", "BAD_EXPIRY")
+    radius = _bounded(radius, "RADIUS_M", "Radius", "metres", "BAD_RADIUS")
 
     audience = enrolled_students(subject, batch)
     if not audience.exists():
@@ -100,6 +131,13 @@ def create_session(*, teacher, subject, batch, latitude, longitude, accuracy=0,
         expected_count=audience.count(),
         expires_at=timezone.now() + dt.timedelta(minutes=minutes),
     )
+    # Re-anchor the expiry to `created_at`, which the database stamps on INSERT
+    # — a moment after the `now()` above. Both the total-validity ceiling and
+    # the manual-marking window are measured from `created_at`, so leaving the
+    # two clocks a few milliseconds apart makes a "30 minute" link fractionally
+    # short of its own ceiling, and the boundary impossible to state exactly.
+    session.expires_at = session.created_at + dt.timedelta(minutes=minutes)
+    session.save(update_fields=["expires_at"])
     return session
 
 
@@ -296,12 +334,66 @@ def mark_attendance(*, request, session, latitude, longitude, accuracy=None,
 # --------------------------------------------------------------------------- #
 #  Teacher overrides
 # --------------------------------------------------------------------------- #
+def manual_mark_minutes():
+    # Read from settings on each call rather than the module-level CONF
+    # snapshot, so the window can be changed (and overridden in tests) without
+    # reimporting this module.
+    return int(settings.ATTENDANCE.get("MANUAL_MARK_MINUTES", 30) or 0)
+
+
+def manual_mark_deadline(session):
+    """The moment after which nobody may be marked present by hand."""
+    minutes = manual_mark_minutes()
+    if minutes <= 0:
+        return None
+    return session.created_at + dt.timedelta(minutes=minutes)
+
+
+def manual_mark_open(session, now=None):
+    deadline = manual_mark_deadline(session)
+    if deadline is None:
+        return False
+    return (now or timezone.now()) <= deadline
+
+
+def manual_mark_seconds_left(session, now=None):
+    deadline = manual_mark_deadline(session)
+    if deadline is None:
+        return 0
+    return max(0, int((deadline - (now or timezone.now())).total_seconds()))
+
+
+def check_manual_window(session):
+    """
+    Raise unless a hand-entered present mark is still allowed.
+
+    Counted from when the link was created, so the teacher is still in the room
+    and can see who is in front of them. Afterwards "mark present" would be an
+    unverifiable claim about the past.
+
+    Only marking *present* is bound by this. Marking someone absent — undoing a
+    mistake — stays open, because the window exists to stop attendance being
+    conjured up later, and removing a mark cannot do that.
+    """
+    minutes = manual_mark_minutes()
+    if minutes <= 0:
+        raise AttendanceError(
+            "Manual marking is switched off for this institute.",
+            "MANUAL_DISABLED", 403)
+    if not manual_mark_open(session):
+        raise AttendanceError(
+            f"Manual marking closed {minutes} minutes after this link was "
+            "created. Ask the student to submit an absence reason instead.",
+            "MANUAL_WINDOW_CLOSED", 403)
+
+
 def manual_mark(*, session, student, teacher, present=True, remark=""):
     if session.teacher_id != teacher.id and not (teacher.is_hod or teacher.is_head):
         raise AttendanceError("You can only edit your own sessions.", "FORBIDDEN", 403)
     if not is_enrolled(student, session.subject) or student.batch_id != session.batch_id:
         raise AttendanceError("That student is not in this class.", "NOT_ENROLLED", 400)
     if present:
+        check_manual_window(session)
         record, created = AttendanceRecord.objects.update_or_create(
             session=session, student=student,
             defaults={
@@ -461,8 +553,13 @@ def can_view_attachment(user, attachment):
     """
     if not user.is_authenticated:
         return False
-    if user.is_student:
-        profile = getattr(user, "student_profile", None)
+    if user.is_student or user.is_guardian:
+        # A guardian sees the evidence their child attached, and only that.
+        # The medical certificate is about their child; withholding it while
+        # showing the request it belongs to would be a strange half-view.
+        from accounts.guardians import acting_profile
+
+        profile = acting_profile(user)
         if profile is None:
             return False
         parent = attachment.reason or attachment.planned

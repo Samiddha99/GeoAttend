@@ -52,8 +52,12 @@ def subjects_for(user):
             assignments__teacher=user, assignments__is_active=True,
             assignments__batch__is_active=True,
         ).distinct()
-    if user.is_student:
-        profile = getattr(user, "student_profile", None)
+    # A guardian sees exactly what the child they are viewing sees, which is
+    # why the two share this branch rather than each having their own.
+    if user.is_student or user.is_guardian:
+        from accounts.guardians import acting_profile
+
+        profile = acting_profile(user)
         if profile is None or not profile.batch.is_active:
             return Subject.objects.none()
         return Subject.objects.filter(enrollments__student=profile, enrollments__is_active=True).distinct()
@@ -102,8 +106,10 @@ def batches_for(user, include_inactive=False):
         qs = Batch.objects.filter(
             assignments__teacher=user, assignments__is_active=True
         ).distinct()
-    elif user.is_student:
-        profile = getattr(user, "student_profile", None)
+    elif user.is_student or user.is_guardian:
+        from accounts.guardians import acting_profile
+
+        profile = acting_profile(user)
         qs = Batch.objects.filter(pk=profile.batch_id) if profile else Batch.objects.none()
     else:
         return Batch.objects.none()
@@ -140,7 +146,7 @@ def visible_teachers_for(user):
     """
     if user.is_head or user.is_hod or user.is_teacher:
         return User.objects.filter(role=User.Role.TEACHER, institute=user.institute)
-    if user.is_student:
+    if user.is_student or user.is_guardian:
         return User.objects.filter(
             role=User.Role.TEACHER, institute=user.institute,
             is_active=True, registration_completed=True,
@@ -184,8 +190,15 @@ def students_qs_for(user, include_inactive_batches=False):
         qs = StudentProfile.objects.filter(
             match, enrollments__is_active=True
         ).distinct()
-    elif user.is_student:
-        qs = StudentProfile.objects.filter(user=user)
+    elif user.is_student or user.is_guardian:
+        from accounts.guardians import acting_profile
+
+        profile = acting_profile(user)
+        # Exactly one student, always: a guardian with three children still
+        # only ever has one of them in scope. Everything downstream — reports,
+        # exports, alerts — inherits that from here.
+        qs = (StudentProfile.objects.filter(pk=profile.pk) if profile
+              else StudentProfile.objects.none())
     else:
         return StudentProfile.objects.none()
     return qs if include_inactive_batches else qs.filter(batch__is_active=True)

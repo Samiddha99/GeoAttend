@@ -17,8 +17,9 @@ from academics.selectors import (
     enrolled_students,
     teacher_subjects_for_batch,
 )
+from accounts.guardians import acting_profile
 from accounts.models import ActivityLog
-from core.decorators import role_required
+from core.decorators import guardian_readonly, role_required
 from core.http import fail, ok
 from core.utils import clean_object_id, clean_object_ids, parse_date
 
@@ -36,6 +37,10 @@ from .models import (
 from .services import (
     CONF,
     AttendanceError,
+    manual_mark_minutes,
+    manual_mark_open,
+    manual_mark_seconds_left,
+    session_limits,
     can_view_attachment,
     check_mark_allowed,
     create_session,
@@ -50,8 +55,23 @@ from .services import (
     submit_planned_absence,
 )
 
-HEAD, HOD, TEACHER, STUDENT = "HEAD", "HOD", "TEACHER", "STUDENT"
+HEAD, HOD, TEACHER, STUDENT, GUARDIAN = (
+    "HEAD", "HOD", "TEACHER", "STUDENT", "GUARDIAN")
 CONF_FACE = settings.FACE
+
+
+def _viewing_context(request):
+    """
+    Whose record a student-facing page is showing.
+
+    Empty for a student looking at their own. For a guardian it names the child
+    and sets `read_only`, which is what the templates key their write controls
+    off — the server refuses those writes regardless, so this only decides
+    whether a guardian is offered a button that would fail.
+    """
+    if not request.user.is_guardian:
+        return {}
+    return {"viewing_child": acting_profile(request.user), "read_only": True}
 
 
 def _visible_sessions(user):
@@ -65,8 +85,8 @@ def _visible_sessions(user):
         return qs.filter(subject__department=user.department)
     if user.is_teacher:
         return qs.filter(teacher=user)
-    if user.is_student:
-        profile = getattr(user, "student_profile", None)
+    if user.is_student or user.is_guardian:
+        profile = acting_profile(user)
         if profile is None or not profile.batch.is_active:
             return qs.none()
         return qs.filter(batch=profile.batch, subject__enrollments__student=profile).distinct()
@@ -116,6 +136,8 @@ def session_detail_page(request, pk):
         # refuse. The endpoint still checks independently.
         "can_request_feedback": 0 <= age <= window and present >= minimum,
         "feedback_too_small": present < minimum,
+        "manual_open": manual_mark_open(session),
+        "manual_minutes": manual_mark_minutes(),
     })
 
 
@@ -214,6 +236,16 @@ def api_session_status(request, pk):
         "expires_at": timezone.localtime(session.expires_at).strftime("%d %b %Y, %H:%M:%S"),
         "expected": session.expected_count,
         "present_count": len(present),
+        # `present` is already in memory, so this is a count over a list rather
+        # than another query.
+        "manual_count": sum(1 for r in present
+                            if r["status"] == AttendanceRecord.Status.MANUAL),
+        # The hand-marking window. Sent so the screen can retire the button
+        # rather than let a teacher click it and be told off; the service
+        # checks independently on every call.
+        "manual_open": manual_mark_open(session),
+        "manual_seconds_left": manual_mark_seconds_left(session),
+        "manual_minutes": manual_mark_minutes(),
         "absent_count": len(absent),
         "percentage": round(len(present) * 100.0 / session.expected_count, 1) if session.expected_count else 0,
         "present": present,
@@ -257,10 +289,23 @@ def api_session_action(request, pk, action):
             minutes = int(request.POST.get("minutes", 5))
         except ValueError:
             return fail("Enter a valid number of minutes.")
-        if not 1 <= minutes <= 180:
-            return fail("Extend by 1–180 minutes.")
+        cap = session_limits()["MAX_EXPIRY_MIN"]
+        if not 1 <= minutes <= cap:
+            return fail(f"Extend by 1–{cap} minutes.")
+        # The ceiling is on the whole window, not on one extension — otherwise
+        # "+5 minutes" clicked six times keeps a link alive all afternoon,
+        # which is exactly what the ceiling exists to stop.
+        if session.expires_at >= session.latest_allowed_expiry:
+            return fail(
+                f"This link has already run its full {cap} minutes. Take "
+                "attendance again if the class is still going.",
+                status=409, code="MAX_VALIDITY_REACHED")
+        before = session.expires_at
         session.extend(minutes)
-        message = f"Extended by {minutes} minute(s)."
+        gained = round((session.expires_at - before).total_seconds() / 60)
+        message = (f"Extended by {gained} minute(s)." if gained >= minutes
+                   else f"Extended by {gained} minute(s) — the {cap}-minute "
+                        "limit for one link.")
     elif action == "cancel":
         session.status = AttendanceSession.Status.CANCELLED
         session.closed_at = timezone.now()
@@ -298,7 +343,10 @@ def api_manual_mark(request, pk):
 @require_GET
 def api_sessions(request):
     qs = _visible_sessions(request.user).annotate(
-        marked=Count("records", filter=Q(records__status__in=["PRESENT", "MANUAL"]))
+        marked=Count("records", filter=Q(records__status__in=["PRESENT", "MANUAL"])),
+        # Annotated alongside rather than counted per row: this list runs to
+        # 500 sessions, and a `manual_count` property would be 500 queries.
+        manual=Count("records", filter=Q(records__status="MANUAL")),
     )
     # clean_object_id() rather than the raw value: ObjectIdAutoField raises
     # ValidationError on a malformed id instead of just not matching, so an
@@ -335,6 +383,11 @@ def api_sessions(request):
         "teacher": s.teacher.full_name or s.teacher.email,
         "expected": s.expected_count,
         "present": s.marked,
+        "manual": s.manual,
+        # What this link was set to, not what the limit is today: a session
+        # created before the ceiling changed should show what it actually used.
+        "validity_minutes": s.validity_minutes,
+        "radius_m": s.radius_m,
         "percentage": round(s.marked * 100.0 / s.expected_count, 1) if s.expected_count else 0,
         "status": s.effective_status,
         "note": s.note,
@@ -441,6 +494,7 @@ def mark_page(request, token):
 
 
 @login_required
+@guardian_readonly
 @require_POST
 def api_mark(request, token):
     session = AttendanceSession.objects.select_related("subject", "batch").filter(token=token).first()
@@ -469,10 +523,12 @@ def api_mark(request, token):
     }, message="Attendance marked successfully.")
 
 
-@role_required(STUDENT)
+@role_required(STUDENT, GUARDIAN)
+@guardian_readonly
 @ensure_csrf_cookie
 def my_attendance_page(request):
-    return render(request, "attendance/my_attendance.html")
+    return render(request, "attendance/my_attendance.html",
+                  _viewing_context(request))
 
 
 # --------------------------------------------------------------------------- #
@@ -602,7 +658,8 @@ def api_absence_reason_submit(request, pk):
               message="Reason submitted. Your teacher will review it.")
 
 
-@role_required(HEAD, HOD, TEACHER, STUDENT)
+@role_required(HEAD, HOD, TEACHER, STUDENT, GUARDIAN)
+@guardian_readonly
 @require_GET
 def api_absence_reasons(request):
     """
@@ -618,8 +675,8 @@ def api_absence_reasons(request):
         "student__department", "reviewed_by",
     ).prefetch_related("attachments")
     user = request.user
-    if user.is_student:
-        profile = getattr(user, "student_profile", None)
+    if user.is_student or user.is_guardian:
+        profile = acting_profile(user)
         if profile is None:
             return ok({"rows": [], "pending": 0})
         qs = qs.filter(student=profile)
@@ -682,13 +739,15 @@ def absence_reasons_page(request):
     })
 
 
-@role_required(STUDENT)
+@role_required(STUDENT, GUARDIAN)
+@guardian_readonly
 @ensure_csrf_cookie
 def my_absence_reasons_page(request):
     """A student's own submissions and where each one stands."""
-    return render(request, "attendance/my_absence_reasons.html", {
-        "reason_window_days": CONF.get("ABSENCE_REASON_DAYS", 3),
-    })
+    return render(request, "attendance/my_absence_reasons.html", dict(
+        _viewing_context(request),
+        reason_window_days=CONF.get("ABSENCE_REASON_DAYS", 3),
+    ))
 
 
 # --------------------------------------------------------------------------- #
@@ -788,7 +847,8 @@ def api_planned_absence_cancel(request, pk):
     return ok(message="Planned absence cancelled.")
 
 
-@role_required(HEAD, HOD, TEACHER, STUDENT)
+@role_required(HEAD, HOD, TEACHER, STUDENT, GUARDIAN)
+@guardian_readonly
 @require_GET
 def api_planned_absences(request):
     qs = PlannedAbsence.objects.select_related(
@@ -796,11 +856,17 @@ def api_planned_absences(request):
     ).prefetch_related("decisions__subject", "decisions__reviewed_by", "attachments")
     user = request.user
 
-    if user.is_student:
-        profile = getattr(user, "student_profile", None)
+    if user.is_student or user.is_guardian:
+        profile = acting_profile(user)
         if profile is None:
             return ok({"rows": [], "pending": 0})
         rows = [_planned_row(p) for p in qs.filter(student=profile)[:300]]
+        if user.is_guardian:
+            # Cancelling is the student's decision. Cleared in the payload
+            # rather than the template because `can_cancel` is what renders the
+            # button, and the cancel endpoint refuses a guardian anyway.
+            for row in rows:
+                row["can_cancel"] = False
         return ok({"rows": rows,
                    "pending": sum(1 for r in rows if r["status"] == "PENDING")})
 
@@ -842,6 +908,7 @@ def api_planned_decision_review(request, pk):
 
 
 @login_required
+@guardian_readonly
 @require_POST
 def api_mark_start(request, token):
     """
@@ -899,7 +966,8 @@ def api_manual_request_decide(request, pk):
     return ok(message=f"{manual.student.name}: {manual.get_status_display().lower()}.")
 
 
-@role_required(HEAD, HOD, TEACHER, STUDENT)
+@role_required(HEAD, HOD, TEACHER, STUDENT, GUARDIAN)
+@guardian_readonly
 @require_GET
 def api_attachment_download(request, pk):
     """
@@ -937,11 +1005,12 @@ def api_attachment_download(request, pk):
     return response
 
 
-@role_required(STUDENT)
+@role_required(STUDENT, GUARDIAN)
+@guardian_readonly
 @require_GET
 def api_my_subjects(request):
     """The subjects a student may narrow a planned absence to."""
-    profile = getattr(request.user, "student_profile", None)
+    profile = acting_profile(request.user)
     if profile is None:
         return ok({"rows": []})
     rows = [{"id": s.id, "code": s.code, "name": s.name}

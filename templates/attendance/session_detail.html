@@ -36,7 +36,10 @@
           <div class="col-4"><div class="border rounded-3 text-center py-2">
             <div class="fs-4 fw-bold text-primary" id="k-expected">0</div><small class="text-muted-2 fs-12">ENROLLED</small></div></div>
           <div class="col-4"><div class="border rounded-3 text-center py-2">
-            <div class="fs-4 fw-bold text-success" id="k-present">0</div><small class="text-muted-2 fs-12">PRESENT</small></div></div>
+            <div class="fs-4 fw-bold text-success" id="k-present">0</div>
+            <small class="text-muted-2 fs-12">PRESENT</small>
+            <!-- Filled by GA.manualNote(); stays empty when nothing was manual. -->
+            <div class="fs-12" id="k-manual"></div></div></div>
           <div class="col-4"><div class="border rounded-3 text-center py-2">
             <div class="fs-4 fw-bold text-danger" id="k-absent">0</div><small class="text-muted-2 fs-12">ABSENT</small></div></div>
         </div>
@@ -124,6 +127,11 @@
             <div id="present-tbl"></div>
           </div>
           <div class="tab-pane fade" id="t2">
+            <!--
+              States the rule rather than leaving a teacher to discover it when
+              the button vanishes. Rewritten on every poll by manualWindowNote().
+            -->
+            <div class="alert alert-light border fs-13 py-2" id="manual-window"></div>
             <div class="input-group input-group-sm mb-3" style="max-width:300px"><span class="input-group-text"><i class="fa-solid fa-magnifying-glass"></i></span><input class="form-control" id="s-absent" placeholder="Name, class roll or exam roll…"></div>
             <div id="absent-tbl"></div>
           </div>
@@ -149,6 +157,23 @@ $(function(){
   let pTable=null, aTable=null, timer=null, poll=null;
   const isOpen = {{ session.is_open|yesno:"true,false" }};
   const SD_STATS = "#k-expected, #k-present, #k-absent";
+  // Seeded from the server so the first paint is already correct, then kept in
+  // step by each poll below.
+  let MANUAL_OPEN = {{ manual_open|yesno:"true,false" }};
+  let MANUAL_MINUTES = {{ manual_minutes }};
+
+  function manualWindowNote(d){
+    if(!d.manual_minutes){
+      return '<i class="fa-solid fa-ban me-1"></i>Manual marking is switched off.';
+    }
+    if(!d.manual_open){
+      return '<i class="fa-solid fa-lock me-1"></i>Manual marking closed — it is '+
+        'open for '+d.manual_minutes+' minutes after the link is created.';
+    }
+    const mins = Math.ceil(d.manual_seconds_left / 60);
+    return '<i class="fa-solid fa-user-pen me-1"></i>You can still mark someone '+
+      'present by hand for about '+mins+' more minute'+(mins===1?'':'s')+'.';
+  }
 
   function refresh(){
     // once:true — this refreshes on a timer, so only the first load shows a
@@ -160,6 +185,16 @@ $(function(){
       $("#status-pill").html(GA.statusPill(d.status));
       $("#expires").text(d.expires_at);
       $("#k-expected").text(d.expected); $("#k-present").text(d.present_count); $("#k-absent").text(d.absent_count);
+      $("#k-manual").html(GA.manualNote(d.manual_count, d.present_count));
+
+      // The hand-marking window, refreshed from every poll. When it shuts we
+      // rebuild the absent table so the button goes away by itself — a teacher
+      // should not discover the rule by being refused.
+      const wasOpen = MANUAL_OPEN;
+      MANUAL_OPEN = !!d.manual_open;
+      MANUAL_MINUTES = d.manual_minutes;
+      $("#manual-window").html(manualWindowNote(d));
+      if(wasOpen && !MANUAL_OPEN && aTable) aTable.setRows(d.absent);
       GA.done(SD_STATS);
       $("#k-bar").css("width", d.percentage+"%");
       $("#n1").text(d.present_count); $("#n2").text(d.absent_count);
@@ -189,7 +224,11 @@ $(function(){
           { key:"exam_roll", label:"Exam roll",
             render:v=> v ? GA.esc(v) : '<span class="text-muted-2">—</span>' },
           { key:"student_id", label:"", sortable:false, className:"text-end", render:v=>
-            '<button class="btn btn-light btn-sm markp" data-id="'+v+'"><i class="fa-solid fa-user-check text-success me-1"></i>Mark present</button>' }
+            MANUAL_OPEN
+              ? '<button class="btn btn-light btn-sm markp" data-id="'+v+'">'+
+                '<i class="fa-solid fa-user-check text-success me-1"></i>Mark present</button>'
+              : '<span class="text-muted-2 fs-12" title="Manual marking closed '+
+                MANUAL_MINUTES+' minutes after the link was created">Window closed</span>' }
         ]});
       } else { pTable.setRows(d.present); aTable.setRows(d.absent); }
 

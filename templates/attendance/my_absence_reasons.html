@@ -1,14 +1,22 @@
 {% extends "layouts/app.html" %}
-{% block page_title %}My absence reasons{% endblock %}
-{% block page_sub %}Reasons you have given for missed classes, and where each one stands.{% endblock %}
+{% block page_title %}{% if read_only %}Absence reasons{% else %}My absence reasons{% endif %}{% endblock %}
+{% block page_sub %}{% if read_only %}Reasons {{ viewing_child.name }} has given for missed
+classes, and where each one stands.{% else %}Reasons you have given for missed classes, and
+where each one stands.{% endif %}{% endblock %}
 
 {% block content %}
 <div class="alert alert-light border fs-13">
   <i class="fa-solid fa-circle-info text-primary me-2"></i>
+  {% if read_only %}
+  A student may explain an absence within <b>{{ reason_window_days }} days</b> of the class,
+  once per class. Only they can submit one — this page is a record of what has been
+  given. A reason does not change the attendance percentage; it is recorded alongside it.
+  {% else %}
   You can explain an absence within <b>{{ reason_window_days }} days</b> of the class, once per
   class. Give one from <a href="{% url 'attendance:my_attendance' %}" class="fw-600">My attendance</a>
   by clicking the red <span class="ga-pill pill-red">Absent</span> mark.
   A reason does not change your attendance percentage — it is recorded alongside it.
+  {% endif %}
 </div>
 
 <ul class="nav nav-tabs mb-3">
@@ -43,11 +51,21 @@
 <div class="tab-pane fade" id="tab-planned">
   <div class="card mb-3"><div class="card-body py-3 d-flex flex-wrap gap-2 align-items-center">
     <div class="fs-13 text-muted-2 flex-grow-1">
+      {% if read_only %}
+      Absences {{ viewing_child.name }} told their teachers about in advance. If a
+      class is missed inside one of these periods, the reason is applied
+      automatically.
+      {% else %}
       Know you will be away? Tell your teachers in advance. If you then miss a class in
       that period, this reason is applied automatically — you will not be asked again.
+      {% endif %}
     </div>
+    <!-- Only a student may file or cancel one; the endpoints refuse a guardian
+         either way, so this just avoids offering a button that cannot work. -->
+    {% if not read_only %}
     <button class="btn btn-primary btn-sm" id="btn-plan">
       <i class="fa-solid fa-calendar-plus me-1"></i>Plan an absence</button>
+    {% endif %}
     <button class="btn btn-light btn-sm" id="btn-refresh-planned">
       <i class="fa-solid fa-rotate"></i></button>
   </div></div>

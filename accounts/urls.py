@@ -1,12 +1,23 @@
 from django.urls import path
 
-from . import views
+from . import guardian_views, views
 
 app_name = "accounts"
 
 urlpatterns = [
     # pages
     path("login/", views.login_page, name="login"),
+    # guardians: a phone number and a WhatsApp code, no password
+    path("guardian/", guardian_views.guardian_login_page, name="guardian_login"),
+    path("guardian/logout/", guardian_views.guardian_logout, name="guardian_logout"),
+    path("api/guardian/start/", guardian_views.api_guardian_start,
+         name="api_guardian_start"),
+    path("api/guardian/resend/", guardian_views.api_guardian_resend,
+         name="api_guardian_resend"),
+    path("api/guardian/verify/", guardian_views.api_guardian_verify,
+         name="api_guardian_verify"),
+    path("api/guardian/child/", guardian_views.api_guardian_switch_child,
+         name="api_guardian_switch_child"),
     path("logout/", views.logout_view, name="logout"),
     path("signup/", views.signup_page, name="signup"),
     path("forgot/", views.forgot_password_page, name="forgot"),

@@ -137,8 +137,11 @@ $(function(){
         { key:"department", label:"Department" },
         { key:"batch", label:"Batch" },
         { key:"held", label:"Held", className:"text-center" },
-        { key:"attended", label:"Attended", className:"text-center" },
-        { key:"percentage", label:"Overall", width:"170px", render:v=>GA.bar(v) },
+        { key:"attended", label:"Attended", className:"text-center",
+          csv:(v,r)=>r.manual ? v+" ("+r.manual+" by teacher)" : v,
+          render:(v,r)=>GA.presentCell(v, r.manual) },
+        { key:"percentage", label:"Overall", width:"170px",
+          render:(v,r)=>GA.barWithManual(v, r.manual, r.attended) },
         { key:"subjects", label:"Per subject", sortable:false,
           csv:v=>(v||[]).map(s=>s.code+" "+s.attended+"/"+s.held+
                                 " ("+s.percentage.toFixed(0)+"%)").join(", "),
@@ -187,7 +190,11 @@ $(function(){
         { key:"enrolled", label:"Enrolled", className:"text-center" },
         { key:"students_attended", label:"Attended ≥1", className:"text-center" },
         { key:"avg_present", label:"Avg present", className:"text-center" },
-        { key:"percentage", label:"Attendance", width:"150px", render:v=>GA.bar(v) },
+        { key:"manual_marks", label:"By teacher", className:"text-center",
+          render:(v,r)=>GA.manualNote(v, r.present_marks, {label:"of "+r.present_marks, tag:"span"})
+                        || '<span class="text-muted-2">—</span>' },
+        { key:"percentage", label:"Attendance", width:"150px",
+          render:(v,r)=>GA.barWithManual(v, r.manual_marks, r.present_marks) },
         { key:"teachers", label:"Teachers" }
       ]});
     });
@@ -205,7 +212,8 @@ $(function(){
         { scales:{ y:{max:100} } });
       GA.table("#tbl-batches",{ perPage:6, rows:rows, empty:"No data.", columns:[
         { key:"label", label:"Batch" }, { key:"classes", label:"Classes", className:"text-center" },
-        { key:"percentage", label:"Attendance", width:"160px", render:v=>GA.bar(v) }]});
+        { key:"percentage", label:"Attendance", width:"160px",
+          render:(v,r)=>GA.barWithManual(v, r.manual, r.present) }]});
     }));
     {% if user.is_head %}
     jobs.push(GA.get("{% url 'dashboard:api_departments_report' %}", f, {quiet:true}).done(function(res){
@@ -215,7 +223,8 @@ $(function(){
         { scales:{ y:{max:100} } });
       GA.table("#tbl-depts",{ perPage:6, rows:rows, empty:"No data.", columns:[
         { key:"label", label:"Department" }, { key:"classes", label:"Classes", className:"text-center" },
-        { key:"percentage", label:"Attendance", width:"160px", render:v=>GA.bar(v) }]});
+        { key:"percentage", label:"Attendance", width:"160px",
+          render:(v,r)=>GA.barWithManual(v, r.manual, r.present) }]});
     }));
     {% else %}
     GA.done("#c-depts, #tbl-depts");
@@ -239,7 +248,8 @@ $(function(){
       GA.table("#tbl-teachers",{ perPage:10, rows:rows, empty:"No sessions in this range.", columns:[
         { key:"label", label:"Teacher", render:(v)=>'<div class="d-flex align-items-center gap-2">'+GA.avatar(v)+'<span class="fw-600">'+GA.esc(v)+'</span></div>' },
         { key:"classes", label:"Classes conducted", className:"text-center" },
-        { key:"percentage", label:"Average attendance", width:"200px", render:v=>GA.bar(v) }]});
+        { key:"percentage", label:"Average attendance", width:"200px",
+          render:(v,r)=>GA.barWithManual(v, r.manual, r.present) }]});
     });
   }
   {% endif %}
@@ -254,10 +264,18 @@ $(function(){
         { key:"name", label:"Student", render:(v,r)=>'<div class="d-flex align-items-center gap-2">'+GA.avatar(v)+
           '<div><div class="fw-600">'+GA.esc(v)+'</div><small class="text-muted-2">'+GA.esc(r.email)+'</small></div></div>' },
         { key:"roll", label:"Class roll" },
+        // Optional on the student record, so a blank one gets a dash rather
+        // than an empty cell that reads as a rendering fault — same treatment
+        // as the Student-wise tab.
+        { key:"exam_roll", label:"Exam roll",
+          render:v=> v ? GA.esc(v) : '<span class="text-muted-2">—</span>' },
         { key:"batch", label:"Batch" },
         { key:"held", label:"Held", className:"text-center" },
-        { key:"attended", label:"Attended", className:"text-center" },
-        { key:"percentage", label:"Overall", width:"170px", render:v=>GA.bar(v) },
+        { key:"attended", label:"Attended", className:"text-center",
+          csv:(v,r)=>r.manual ? v+" ("+r.manual+" by teacher)" : v,
+          render:(v,r)=>GA.presentCell(v, r.manual) },
+        { key:"percentage", label:"Overall", width:"170px",
+          render:(v,r)=>GA.barWithManual(v, r.manual, r.attended) },
         { key:"subjects", label:"Weakest subjects", sortable:false,
           csv:v=>(v||[]).slice().sort((a,b)=>a.percentage-b.percentage).slice(0,3)
                  .map(s=>s.code+" "+s.percentage.toFixed(0)+"%").join(", "),

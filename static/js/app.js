@@ -237,6 +237,44 @@ window.GA = (function ($) {
       '<small class="fw-600" style="min-width:44px">' + v.toFixed(1) + "%</small></div>";
   }
 
+  /**
+   * How much of a present figure a teacher entered by hand.
+   *
+   * Every attendance number in this app counts MANUAL marks as present, which
+   * is correct but hides something worth seeing: a class at 95% where a third
+   * of the marks were typed in by the teacher is not the same class as one at
+   * 95% where the students all marked themselves.
+   *
+   * Returns "" when nothing was manual, so the ordinary case stays clean — a
+   * "0 by teacher" note under every row would be noise on most screens.
+   * `total` is the present count, not the class size: the question is what
+   * share of the attendance was hand-entered.
+   */
+  function manualNote(manual, total, opts) {
+    const n = Number(manual || 0);
+    if (!n) return "";
+    const o = $.extend({ label: "by teacher", pct: true, tag: "small" }, opts || {});
+    const t = Number(total || 0);
+    const share = o.pct && t ? " (" + ((n * 100) / t).toFixed(1) + "%)" : "";
+    return '<' + o.tag + ' class="text-muted-2 ga-manual-note" ' +
+      'title="Marked present by a teacher rather than by the student">' +
+      '<i class="fa-solid fa-user-pen me-1"></i>' + n + " " + esc(o.label) +
+      share + "</" + o.tag + ">";
+  }
+
+  /** A present count with its manual share underneath. */
+  function presentCell(present, manual) {
+    const note = manualNote(manual, present);
+    return '<div class="fw-600">' + Number(present || 0) + "</div>" +
+      (note ? "<div>" + note + "</div>" : "");
+  }
+
+  /** `bar()` with the manual share stated under the percentage. */
+  function barWithManual(value, manual, present) {
+    const note = manualNote(manual, present);
+    return bar(value) + (note ? '<div class="mt-1">' + note + "</div>" : "");
+  }
+
   function statusPill(status) {
     const map = {
       OPEN: ["pill-green", "fa-circle-dot", "Open"],
@@ -1372,12 +1410,24 @@ window.GA = (function ($) {
     });
     $("[data-bs-toggle='tooltip']").each(function () { new bootstrap.Tooltip(this); });
     $(document).on("click", "[data-copy]", function () { copy($(this).data("copy")); });
+
+    /*
+      Guardian child switcher. Delegated from the document because the bar it
+      belongs to renders inside <main>, above this file in the page — a script
+      tag in that partial would run before jQuery exists.
+    */
+    $(document).on("click", "#ga-child-menu [data-student]", function () {
+      var $menu = $(this).closest("#ga-child-menu");
+      post($menu.attr("data-switch-url"), { student: $(this).attr("data-student") })
+        .done(function (res) { window.location = res.data.redirect; });
+    });
   });
 
   return {
     csrf, toast, overlay, btnBusy, request, get, post, submit, showErrors, clearErrors,
     confirm, table, chart, charts, palette, location: location_, deviceHash, countdown,
     esc, pctPill, bar, statusPill, avatar, phone, mmss, copy, query,
+    manualNote, presentCell, barWithManual,
     loading, done, chartIsEmpty, spin, absenceReason, absenceCell,
     plannedDecision, plannedChip, reasonDetail, reasonChip,
     attachmentList, attachField, attachCheck, attachForm, ATTACH,

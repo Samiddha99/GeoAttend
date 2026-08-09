@@ -13,9 +13,10 @@ from django.views.decorators.http import require_GET, require_POST
 
 from academics.models import Batch, Department, Subject
 from academics.selectors import departments_for, visible_teachers_for
+from accounts.guardians import acting_profile
 from accounts.models import ActivityLog, User
 from attendance.models import AttendanceSession
-from core.decorators import role_required
+from core.decorators import guardian_readonly, role_required
 from core.http import fail, ok
 from core.utils import clean_object_id, parse_date
 
@@ -24,7 +25,8 @@ from .models import FeedbackForm, FeedbackRecipient, FeedbackResponse
 from .questions import as_payload
 from .services import FeedbackError
 
-HEAD, HOD, TEACHER, STUDENT = "HEAD", "HOD", "TEACHER", "STUDENT"
+HEAD, HOD, TEACHER, STUDENT, GUARDIAN = (
+    "HEAD", "HOD", "TEACHER", "STUDENT", "GUARDIAN")
 
 
 # --------------------------------------------------------------------------- #
@@ -49,16 +51,24 @@ def api_send(request, pk):
 # --------------------------------------------------------------------------- #
 #  Student
 # --------------------------------------------------------------------------- #
-@role_required(STUDENT)
+@role_required(STUDENT, GUARDIAN)
+@guardian_readonly
 @ensure_csrf_cookie
 def my_feedback_page(request):
-    return render(request, "feedback/my_feedback.html", {"questions": as_payload()})
+    context = {"questions": as_payload()}
+    if request.user.is_guardian:
+        context["viewing_child"] = acting_profile(request.user)
+        context["read_only"] = True
+    return render(request, "feedback/my_feedback.html", context)
 
 
-@role_required(STUDENT)
+@role_required(STUDENT, GUARDIAN)
+@guardian_readonly
 @require_GET
 def api_my_feedback(request):
-    profile = getattr(request.user, "student_profile", None)
+    # A guardian reads this list; `api_form` and `api_submit` stay STUDENT-only,
+    # so they can see what was said but never answer a form as their child.
+    profile = acting_profile(request.user)
     if profile is None:
         return ok({"pending": [], "submitted": [], "pending_count": 0})
 

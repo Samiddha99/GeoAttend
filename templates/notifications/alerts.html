@@ -445,7 +445,8 @@ $(function(){
           '<div class="d-flex align-items-center gap-2">' + GA.avatar(v) +
           '<div><div class="fw-600">' + GA.esc(v) + "</div><small class=\"text-muted-2\">" +
           GA.esc(r.roll || r.email) + " · " + GA.esc(r.batch) + "</small></div></div>" },
-        { key:"percentage", label:"Attendance", width:"150px", render:v=>GA.bar(v) },
+        { key:"percentage", label:"Attendance", width:"150px",
+          render:(v,r)=>GA.barWithManual(v, r.manual, r.attended) },
         { key:"attended", label:"Att/Held", className:"text-center", render:(v,r)=> v + " / " + r.held },
         { key:"student_number", label:"Student no.", render:(v,r)=> v
           ? '<span class="ga-pill pill-green"><i class="fa-brands fa-whatsapp"></i>' + GA.esc(v) + "</span>"

@@ -55,9 +55,19 @@ $(function(){
     { key:"batch", label:"Batch" },
     { key:"teacher", label:"Teacher" },
     { key:"expected", label:"Enrolled", className:"text-center" },
+    // What this session was actually set to. Shown rather than the current
+    // ceiling, so an older session created under a looser limit still reads
+    // honestly — and a value above today's cap is visible rather than hidden.
+    { key:"validity_minutes", label:"Link validity", className:"text-center",
+      csv:v=>v+" min",
+      render:v=>'<span class="ga-pill pill-blue">'+v+' min</span>' },
+    { key:"radius_m", label:"Geo-fence", className:"text-center",
+      csv:v=>v+" m",
+      render:v=>'<span class="ga-pill pill-grey">'+v+' m</span>' },
     { key:"present", label:"Present", className:"text-center",
       render:v=>'<span class="fw-600 text-success">'+v+'</span>' },
-    { key:"percentage", label:"Attendance", width:"170px", render:v=>GA.bar(v) },
+    { key:"percentage", label:"Attendance", width:"170px",
+      render:(v,r)=>GA.barWithManual(v, r.manual, r.present) },
     { key:"status", label:"Status", render:v=>GA.statusPill(v) },
     { key:"url", label:"", sortable:false, className:"text-end",
       render:v=>'<a href="'+v+'" class="btn btn-light btn-sm"><i class="fa-solid fa-chevron-right"></i></a>' }

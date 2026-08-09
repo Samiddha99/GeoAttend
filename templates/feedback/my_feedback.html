@@ -1,12 +1,14 @@
 {% extends "layouts/app.html" %}
 {% block page_title %}Class feedback{% endblock %}
-{% block page_sub %}Tell your teachers how a class went. Your answers are shown to
-staff without your name attached.{% endblock %}
+{% block page_sub %}{% if read_only %}Feedback {{ viewing_child.name }} has been asked for,
+and what they have sent. Staff see their answers without a name attached.{% else %}Tell your
+teachers how a class went. Your answers are shown to staff without your name
+attached.{% endif %}{% endblock %}
 
 {% block content %}
 <ul class="nav nav-tabs mb-3">
   <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-pending">
-    <i class="fa-solid fa-inbox me-1"></i>Waiting for you
+    <i class="fa-solid fa-inbox me-1"></i>{% if read_only %}Waiting{% else %}Waiting for you{% endif %}
     <span class="ga-pill pill-amber ms-1" id="pending-badge">0</span></button></li>
   <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-done">
     <i class="fa-solid fa-circle-check me-1"></i>Already given</button></li>
@@ -16,8 +18,9 @@ staff without your name attached.{% endblock %}
   <div class="tab-pane fade show active" id="tab-pending">
     <div class="alert alert-light border fs-13">
       <i class="fa-solid fa-circle-info text-primary me-2"></i>
-      Each form stays open for <b>24 hours</b> after your teacher sends it. Once it
-      closes it disappears from this list — it is not counted against you.
+      Each form stays open for <b>24 hours</b> after the teacher sends it. Once it
+      closes it disappears from this list — it is not counted against
+      {% if read_only %}them{% else %}you{% endif %}.
     </div>
     <div class="card"><div class="card-body"><div id="tbl-pending"></div></div></div>
   </div>
@@ -111,6 +114,9 @@ staff without your name attached.{% endblock %}
 <script>
 $(function(){
   const QUESTIONS = JSON.parse(document.getElementById("questions-data").textContent);
+  // A guardian reads this page. Answering is the student's to do, and the
+  // submit endpoint refuses a guardian regardless of what the page offers.
+  const READ_ONLY = {{ read_only|yesno:"true,false" }};
   let pendingTable = null, doneTable = null, current = null, rating = 0;
 
   const cols = (done) => [
@@ -129,7 +135,9 @@ $(function(){
     { key:"id", label:"", sortable:false, className:"text-end", render:(v,r)=> done
         ? '<button class="btn btn-light btn-sm view" data-id="'+v+'">'+
           '<i class="fa-solid fa-eye me-1"></i>View</button>'
-        : '<button class="btn btn-primary btn-sm answer" data-id="'+v+'">Give feedback</button>' }
+        : (READ_ONLY
+            ? '<span class="ga-pill pill-amber">Waiting on your child</span>'
+            : '<button class="btn btn-primary btn-sm answer" data-id="'+v+'">Give feedback</button>') }
   ];
 
   function load(){

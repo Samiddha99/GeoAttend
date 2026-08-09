@@ -15,7 +15,7 @@ from accounts import face_service
 from accounts.models import ActivityLog, FaceEnrolment, FaceSample, Invitation
 from accounts.services import invite_user, unlink_device
 from notifications.whatsapp import normalise_msisdn
-from core.decorators import role_required
+from core.decorators import guardian_readonly, role_required
 from core.http import fail, form_errors, ok
 from core.utils import clean_object_id, clean_object_ids
 
@@ -47,7 +47,8 @@ from .selectors import (
     visible_teachers_for,
 )
 
-HEAD, HOD, TEACHER, STUDENT = "HEAD", "HOD", "TEACHER", "STUDENT"
+HEAD, HOD, TEACHER, STUDENT, GUARDIAN = (
+    "HEAD", "HOD", "TEACHER", "STUDENT", "GUARDIAN")
 
 
 def dial(raw):
@@ -103,7 +104,8 @@ def batches_page(request):
     })
 
 
-@role_required(HEAD, HOD, TEACHER, STUDENT)
+@role_required(HEAD, HOD, TEACHER, STUDENT, GUARDIAN)
+@guardian_readonly
 @ensure_csrf_cookie
 def teachers_page(request):
     # Everyone on staff sees the whole institute's teachers; who may *edit* a
@@ -111,7 +113,11 @@ def teachers_page(request):
     # by the write endpoints. `can_manage` here only means "can edit anyone
     # at all", which is what decides whether the invite modal exists.
     can_manage = request.user.role in (HEAD, HOD)
-    is_student = request.user.role == STUDENT
+    # "Directory mode": a read-only list with no manage controls and no
+    # personal numbers. Guardians get the same treatment as students, because
+    # the reasons for it — a teacher who has left, a private mobile — do not
+    # change with who is doing the reading.
+    is_student = request.user.role in (STUDENT, GUARDIAN)
     institute = request.user.institute
     # Filters span the institute now that the table does. They deliberately do
     # not come from api_lookups: for a teacher that endpoint returns only the
@@ -487,7 +493,8 @@ def _assignment_rows(teacher):
         is_active=True, batch__is_active=True)]
 
 
-@role_required(HEAD, HOD, TEACHER, STUDENT)
+@role_required(HEAD, HOD, TEACHER, STUDENT, GUARDIAN)
+@guardian_readonly
 @require_GET
 def api_teachers(request):
     # Read scope: staff see the whole institute. Editing is decided per row by
@@ -504,7 +511,7 @@ def api_teachers(request):
     manageable = manageable_department_ids(request.user)   # None = every department
     # Hiding the column client-side while still shipping the number in the JSON
     # would not be hiding it at all, so students never receive it.
-    show_mobile = request.user.role != STUDENT
+    show_mobile = request.user.role not in (STUDENT, GUARDIAN)
     pending = {}
     if can_manage:
         pending = {

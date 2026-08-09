@@ -87,6 +87,16 @@ class AttendanceSession(models.Model):
         return self.records.filter(status__in=["PRESENT", "MANUAL"]).count()
 
     @property
+    def manual_count(self):
+        """
+        Of those present, how many a teacher entered by hand.
+
+        A subset of `present_count`, never a third bucket — MANUAL is one of
+        the two statuses that count as present.
+        """
+        return self.records.filter(status="MANUAL").count()
+
+    @property
     def percentage(self):
         if not self.expected_count:
             return 0.0
@@ -101,9 +111,37 @@ class AttendanceSession(models.Model):
             self.save(update_fields=["status", "closed_at", "expires_at"])
         return self
 
+    @property
+    def validity_minutes(self):
+        """How long this link was set to live, from creation to expiry."""
+        return max(0, round((self.expires_at - self.created_at).total_seconds() / 60))
+
+    @property
+    def latest_allowed_expiry(self):
+        """
+        The furthest `expires_at` may ever be pushed, counted from creation.
+
+        The cap is on the *total* window, not on one extension. Capping each
+        extension instead would let a teacher click "+5 minutes" six times and
+        keep a link alive all afternoon — which is the thing the ceiling exists
+        to prevent.
+        """
+        from django.conf import settings
+
+        cap = int(settings.ATTENDANCE.get("MAX_EXPIRY_MIN", 30))
+        return self.created_at + dt.timedelta(minutes=cap)
+
     def extend(self, minutes):
+        """
+        Push the expiry out, never past the total-validity ceiling.
+
+        Returns the session. Callers that need to tell the teacher they hit the
+        ceiling should compare `expires_at` before and after, or check
+        `latest_allowed_expiry` first.
+        """
         base = max(self.expires_at, timezone.now())
-        self.expires_at = base + dt.timedelta(minutes=minutes)
+        self.expires_at = min(base + dt.timedelta(minutes=minutes),
+                              self.latest_allowed_expiry)
         if self.status == self.Status.CLOSED:
             self.status = self.Status.OPEN
             self.closed_at = None

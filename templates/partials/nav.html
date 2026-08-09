@@ -43,20 +43,29 @@
     <i class="fa-solid fa-chalkboard-user"></i> Teachers</a>
 {% endif %}
 
-{% if user.is_student %}
-  <div class="nav-label">Me</div>
+<!--
+  Students and guardians share this block; the staff block below is reached
+  only by staff. This used to fall through to a bare else branch, which would
+  have handed a guardian the whole staff menu — every link a 403, but alarming
+  to look at. Naming the staff roles explicitly is what closes that.
+-->
+{% if user.is_student or user.is_guardian %}
+  <div class="nav-label">{% if user.is_guardian %}My child{% else %}Me{% endif %}</div>
   <a href="{% url 'attendance:my_attendance' %}" class="{% if '/attendance/me' in request.path %}active{% endif %}">
-    <i class="fa-solid fa-calendar-check"></i> My attendance</a>
+    <i class="fa-solid fa-calendar-check"></i>
+    {% if user.is_guardian %}Attendance{% else %}My attendance{% endif %}</a>
   <a href="{% url 'attendance:my_absence_reasons' %}" class="{% if '/attendance/my-reasons' in request.path %}active{% endif %}">
     <i class="fa-solid fa-comment-dots"></i> Absence reasons</a>
   <a href="{% url 'feedback:my_feedback' %}" class="{% if '/feedback/my' in request.path %}active{% endif %}">
     <i class="fa-solid fa-star-half-stroke"></i> Class feedback
-    {% if pending_feedback %}<span class="ga-nav-badge" id="ga-feedback-badge"
+    <!-- The badge counts forms waiting to be answered, which is a student's
+         to-do, never a guardian's. -->
+    {% if pending_feedback and not user.is_guardian %}<span class="ga-nav-badge" id="ga-feedback-badge"
       title="{{ pending_feedback }} waiting for you">{{ pending_feedback }}</span>
     {% else %}<span class="ga-nav-badge d-none" id="ga-feedback-badge">0</span>{% endif %}</a>
   <a href="{% url 'academics:teachers' %}" class="{% if '/manage/teachers' in request.path %}active{% endif %}">
     <i class="fa-solid fa-chalkboard-user"></i> Teachers</a>
-{% else %}
+{% elif user.is_staff_role %}
   <div class="nav-label">Attendance</div>
   <a href="{% url 'attendance:sessions' %}" class="{% if '/attendance/sessions' in request.path %}active{% endif %}">
     <i class="fa-solid fa-clock-rotate-left"></i> Class sessions</a>
@@ -74,5 +83,15 @@
 {% endif %}
 
 <div class="nav-label">Account</div>
+<!--
+  No profile page for a guardian: everything on it — password, email, device,
+  face — is a setting they do not have. Signing out is the only account action
+  that means anything to them.
+-->
+{% if user.is_guardian %}
+<a href="{% url 'accounts:guardian_logout' %}">
+  <i class="fa-solid fa-arrow-right-from-bracket"></i> Sign out</a>
+{% else %}
 <a href="{% url 'accounts:profile' %}" class="{% if '/auth/profile' in request.path %}active{% endif %}">
   <i class="fa-solid fa-user-gear"></i> Profile &amp; security</a>
+{% endif %}

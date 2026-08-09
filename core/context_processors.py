@@ -15,10 +15,38 @@ def site(request):
         # chances to forget, and the symptom of forgetting — a filter with no
         # options — is easy to miss in review.
         "subject_types": subject_type_options(),
+        # Whose record a guardian is looking at, and who else they could pick.
+        # A global for the same reason as the types above: the bar appears on
+        # every page a guardian can reach, and a view that forgot to supply it
+        # would silently render a page with no indication whose data it shows.
+        "guardian_child": guardian_child(request),
+        "guardian_children": guardian_children(request),
         "current_role": getattr(user, "role", None) if getattr(user, "is_authenticated", False) else None,
         "pending_reviews": pending_review_count(user),
         "pending_feedback": pending_feedback_count(user),
     }
+
+
+def guardian_child(request):
+    """
+    The student a guardian is viewing — already resolved by the middleware, so
+    this is a read rather than another set of queries.
+    """
+    user = getattr(request, "user", None)
+    if not getattr(user, "is_authenticated", False) or not user.is_guardian:
+        return None
+    return getattr(request, "guardian_child", None)
+
+
+def guardian_children(request):
+    """The switcher rows, or [] for anyone with fewer than two children."""
+    user = getattr(request, "user", None)
+    if not getattr(user, "is_authenticated", False) or not user.is_guardian:
+        return []
+
+    from accounts.guardians import child_options
+
+    return child_options(request)
 
 
 def pending_feedback_count(user):

@@ -22,7 +22,9 @@ $(function(){
       '<div class="text-muted-2">overall attendance</div>'+
       '<div class="ga-bar mt-3"><span style="width:'+d.overall.percentage+'%;background:#4f46e5"></span></div>'+
       '<div class="row mt-3 text-center"><div class="col-4"><div class="fw-bold">'+d.overall.held+'</div><small class="text-muted-2">held</small></div>'+
-      '<div class="col-4"><div class="fw-bold text-success">'+d.overall.attended+'</div><small class="text-muted-2">present</small></div>'+
+      '<div class="col-4"><div class="fw-bold text-success">'+d.overall.attended+'</div>'+
+      '<small class="text-muted-2">present</small>'+
+      GA.manualNote(d.overall.manual, d.overall.attended, {tag:"div", pct:false})+'</div>'+
       '<div class="col-4"><div class="fw-bold text-danger">'+d.overall.missed+'</div><small class="text-muted-2">missed</small></div></div>'+
       '</div></div></div>'+
       '<div class="col-md-8"><div class="card h-100"><div class="card-header">Subject breakdown</div>'+
@@ -33,9 +35,12 @@ $(function(){
       {key:"name",label:"Subject"},
       GA.subjectTypeCol(),
       {key:"held",label:"Held",className:"text-center"},
-      {key:"attended",label:"Present",className:"text-center"},
+      {key:"attended",label:"Present",className:"text-center",
+       csv:(v,r)=>r.manual ? v+" ("+r.manual+" by teacher)" : v,
+       render:(v,r)=>GA.presentCell(v, r.manual)},
       {key:"missed",label:"Missed",className:"text-center"},
-      {key:"percentage",label:"Attendance",width:"170px",render:v=>GA.bar(v)}
+      {key:"percentage",label:"Attendance",width:"170px",
+       render:(v,r)=>GA.barWithManual(v, r.manual, r.attended)}
     ]});
     GA.table("#t2",{perPage:15, rows:d.recent, empty:"Nothing here yet.", columns:[
       {key:"date",label:"Date"},{key:"time",label:"Time"},

@@ -96,7 +96,8 @@ $(function(){
       }
       $("#k-pct").text(d.overall.percentage.toFixed(1)+"%");
       $("#k-held").text(d.overall.held);
-      $("#k-att").text(d.overall.attended);
+      $("#k-att").html(String(d.overall.attended) +
+        GA.manualNote(d.overall.manual, d.overall.attended, {tag:"div"}));
       $("#k-miss").text(d.overall.missed);
 
       if(d.open_sessions && d.open_sessions.length){
@@ -124,8 +125,11 @@ $(function(){
         { key:"name", label:"Subject", render:v=>'<span class="fw-600">'+GA.esc(v)+'</span>' },
         GA.subjectTypeCol(),
         { key:"held", label:"Held", className:"text-center" },
-        { key:"attended", label:"Attended", className:"text-center" },
-        { key:"percentage", label:"Attendance", width:"160px", render:v=>GA.bar(v) }
+        { key:"attended", label:"Attended", className:"text-center",
+          csv:(v,r)=>r.manual ? v+" ("+r.manual+" by teacher)" : v,
+          render:(v,r)=>GA.presentCell(v, r.manual) },
+        { key:"percentage", label:"Attendance", width:"160px",
+          render:(v,r)=>GA.barWithManual(v, r.manual, r.attended) }
       ]});
 
       GA.table("#tbl-recent", { perPage:8, rows:d.recent, empty:"No classes in this range.", columns:[

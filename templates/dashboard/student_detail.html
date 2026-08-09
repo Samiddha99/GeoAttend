@@ -70,7 +70,10 @@ $(function(){
     })).done(function(res){
       const d = res.data;
       $("#k-pct").text(d.overall.percentage.toFixed(1)+"%");
-      $("#k-held").text(d.overall.held); $("#k-att").text(d.overall.attended); $("#k-miss").text(d.overall.missed);
+      $("#k-held").text(d.overall.held);
+      $("#k-att").html(String(d.overall.attended) +
+        GA.manualNote(d.overall.manual, d.overall.attended, {tag:"div"}));
+      $("#k-miss").text(d.overall.missed);
       GA.done(STATS);
       // Filled once, from the first unfiltered response. Refilling it on every
       // load would drop the options the current filter excluded, and the user
@@ -88,9 +91,12 @@ $(function(){
         { key:"name", label:"Subject" },
         GA.subjectTypeCol(),
         { key:"held", label:"Held", className:"text-center" },
-        { key:"attended", label:"Present", className:"text-center" },
+        { key:"attended", label:"Present", className:"text-center",
+          csv:(v,r)=>r.manual ? v+" ("+r.manual+" by teacher)" : v,
+          render:(v,r)=>GA.presentCell(v, r.manual) },
         { key:"missed", label:"Missed", className:"text-center" },
-        { key:"percentage", label:"Attendance", width:"160px", render:v=>GA.bar(v) }]});
+        { key:"percentage", label:"Attendance", width:"160px",
+          render:(v,r)=>GA.barWithManual(v, r.manual, r.attended) }]});
       GA.table("#t-recent",{ perPage:12, rows:d.recent, empty:"No classes in this range.", columns:[
         { key:"date", label:"Date" }, { key:"time", label:"Time" },
         { key:"subject", label:"Subject", render:v=>'<span class="ga-pill pill-violet">'+GA.esc(v)+'</span>' },

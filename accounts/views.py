@@ -10,6 +10,7 @@ from django.utils import timezone
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.decorators.http import require_GET, require_POST
 
+from core.decorators import deny_guardian_page, guardian_readonly
 from core.http import client_ip, fail, form_errors, ok
 from core.utils import normalise_email
 
@@ -107,6 +108,7 @@ def complete_profile(request):
 #  Face enrolment
 # --------------------------------------------------------------------------- #
 @login_required
+@deny_guardian_page
 @ensure_csrf_cookie
 def face_capture_page(request):
     """
@@ -124,6 +126,7 @@ def face_capture_page(request):
 
 
 @login_required
+@guardian_readonly
 @require_POST
 def api_face_enrol(request):
     """Three frames in, one enrolment out — or one message saying why not."""
@@ -149,6 +152,7 @@ def api_face_enrol(request):
 
 
 @login_required
+@deny_guardian_page
 @ensure_csrf_cookie
 def profile_page(request):
     profile = None
@@ -336,7 +340,14 @@ def api_forgot_start(request):
     if not form.is_valid():
         return fail("Please enter a valid email address.", form_errors(form))
     email = normalise_email(form.cleaned_data["email"])
-    user = User.objects.filter(email=email, registration_completed=True).first()
+    # Guardian accounts are excluded, not just unlikely to match. Their email is
+    # synthetic (…@guardian.invalid, undeliverable) and they hold an unusable
+    # password, so a reset could never complete — but leaving them in the query
+    # means one code path where "set a password" is even attempted for an
+    # account whose whole design is not having one.
+    user = User.objects.filter(
+        email=email, registration_completed=True
+    ).exclude(role=User.Role.GUARDIAN).first()
     data = {"email": email}
     if user:
         otp, code = EmailOTP.issue(email, EmailOTP.Purpose.PASSWORD_RESET)
@@ -365,7 +376,10 @@ def api_forgot_confirm(request):
     good, message = otp.verify(form.cleaned_data["code"])
     if not good:
         return fail(message)
-    user = User.objects.filter(email=email).first()
+    # Belt and braces: no code can ever be issued for a guardian above, but the
+    # two halves of this flow are separate endpoints and should not depend on
+    # each other's filtering to stay safe.
+    user = User.objects.filter(email=email).exclude(role=User.Role.GUARDIAN).first()
     if user is None:
         return fail("Account not found.", status=404)
     user.set_password(form.cleaned_data["password1"])
@@ -378,6 +392,7 @@ def api_forgot_confirm(request):
 #  AJAX: profile
 # --------------------------------------------------------------------------- #
 @login_required
+@guardian_readonly
 @require_POST
 def api_profile_update(request):
     form = ProfileForm(request.POST, instance=request.user)
@@ -388,6 +403,7 @@ def api_profile_update(request):
 
 
 @login_required
+@guardian_readonly
 @require_POST
 def api_change_password(request):
     form = ChangePasswordForm(request.user, request.POST)
@@ -401,6 +417,7 @@ def api_change_password(request):
 
 
 @login_required
+@guardian_readonly
 @require_POST
 def api_reset_device(request):
     """

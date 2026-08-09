@@ -36,6 +36,7 @@ class User(AbstractBaseUser, PermissionsMixin):
         HOD = "HOD", "Head of Department"
         TEACHER = "TEACHER", "Teacher"
         STUDENT = "STUDENT", "Student"
+        GUARDIAN = "GUARDIAN", "Guardian"
 
     email = models.EmailField(unique=True)
     full_name = models.CharField(max_length=150, blank=True)
@@ -65,6 +66,15 @@ class User(AbstractBaseUser, PermissionsMixin):
     face_enrolled = models.BooleanField(
         default=False,
         help_text="Student has captured the three enrolment images.",
+    )
+
+    # A guardian signs in with this number and a WhatsApp code — there is no
+    # password. Unique so one number is one account however many children it
+    # covers, and NULL (not "") for everyone else, because a unique column
+    # cannot hold two empty strings.
+    guardian_mobile = models.CharField(
+        max_length=20, null=True, blank=True, unique=True, db_index=True,
+        help_text="Set only on guardian accounts. The number is the login.",
     )
 
     # anti proxy-attendance: a student may only mark from their bound device
@@ -109,6 +119,15 @@ class User(AbstractBaseUser, PermissionsMixin):
     @property
     def is_student(self):
         return self.role == self.Role.STUDENT
+
+    @property
+    def is_guardian(self):
+        return self.role == self.Role.GUARDIAN
+
+    @property
+    def is_staff_role(self):
+        """Head, HoD or teacher — the roles that administer anything."""
+        return self.role in (self.Role.HEAD, self.Role.HOD, self.Role.TEACHER)
 
     @property
     def short_name(self):
@@ -178,6 +197,115 @@ class EmailOTP(models.Model):
 
     def verify(self, code):
         """Returns (ok, message)."""
+        if self.is_used:
+            return False, "This code has already been used."
+        if self.is_expired:
+            return False, "This code has expired. Please request a new one."
+        if self.attempts >= settings.OTP_MAX_ATTEMPTS:
+            return False, "Too many incorrect attempts. Please request a new code."
+        if sha256(str(code).strip()) != self.code_hash:
+            self.attempts += 1
+            self.save(update_fields=["attempts"])
+            left = max(settings.OTP_MAX_ATTEMPTS - self.attempts, 0)
+            return False, f"Incorrect code. {left} attempt(s) left."
+        self.is_used = True
+        self.save(update_fields=["is_used"])
+        return True, "Verified."
+
+
+class PhoneOTP(models.Model):
+    """
+    One-time codes sent over WhatsApp. Currently only guardians sign in this
+    way, which is why the code is the entire credential.
+
+    Deliberately a separate model from EmailOTP rather than a nullable column
+    on it. The two have different threat models: an email code lands in a
+    mailbox behind its own password, while this one is the *only* thing between
+    a phone number and a child's attendance record. It gets its own resend
+    ceiling and its own lockout, and sharing a table would have meant one set
+    of limits governing both.
+    """
+
+    class Purpose(models.TextChoices):
+        GUARDIAN_LOGIN = "GLOGIN", "Guardian sign-in"
+
+    mobile = models.CharField(max_length=20, db_index=True)
+    purpose = models.CharField(max_length=10, choices=Purpose.choices,
+                               default=Purpose.GUARDIAN_LOGIN)
+    code_hash = models.CharField(max_length=64)
+    attempts = models.PositiveSmallIntegerField(default=0)
+    # Counted so that a number cannot be used to send unlimited WhatsApp
+    # messages to whoever owns it. Kept on the record rather than in the
+    # session: the session belongs to the sender, who is the problem.
+    sends = models.PositiveSmallIntegerField(default=1)
+    is_used = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    last_sent_at = models.DateTimeField(default=timezone.now)
+    expires_at = models.DateTimeField()
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [models.Index(fields=["mobile", "purpose", "is_used"])]
+
+    def __str__(self):
+        return f"{self.mobile} · {self.purpose}"
+
+    @classmethod
+    def issue(cls, mobile, purpose=Purpose.GUARDIAN_LOGIN, ttl_minutes=None):
+        """Retire any code still outstanding for this number, then mint one."""
+        cls.objects.filter(mobile=mobile, purpose=purpose,
+                           is_used=False).update(is_used=True)
+        code = numeric_otp(6)
+        ttl = ttl_minutes or getattr(settings, "PHONE_OTP_TTL_MINUTES",
+                                     settings.OTP_TTL_MINUTES)
+        otp = cls.objects.create(
+            mobile=mobile, purpose=purpose, code_hash=sha256(code),
+            expires_at=timezone.now() + dt.timedelta(minutes=ttl),
+        )
+        return otp, code
+
+    @property
+    def is_expired(self):
+        return timezone.now() > self.expires_at
+
+    @property
+    def max_sends(self):
+        return getattr(settings, "PHONE_OTP_MAX_SENDS", 5)
+
+    @property
+    def resend_wait(self):
+        """Seconds left before another code may be sent, 0 if it may go now."""
+        gap = getattr(settings, "PHONE_OTP_RESEND_SECONDS", 60)
+        elapsed = (timezone.now() - self.last_sent_at).total_seconds()
+        return max(0, int(gap - elapsed))
+
+    def resend(self):
+        """
+        A fresh code on the same record, so the ceiling still applies.
+
+        Returns (code, error). Minting a *new* record on every resend would
+        reset both the send count and the attempt count, which is the whole
+        thing the limits exist to prevent.
+        """
+        if self.sends >= self.max_sends:
+            return None, ("Too many codes requested for this number. "
+                          "Please try again later.")
+        if self.resend_wait:
+            return None, (f"Please wait {self.resend_wait} seconds before "
+                          "asking for another code.")
+        code = numeric_otp(6)
+        ttl = getattr(settings, "PHONE_OTP_TTL_MINUTES", settings.OTP_TTL_MINUTES)
+        self.code_hash = sha256(code)
+        self.sends += 1
+        self.attempts = 0
+        self.last_sent_at = timezone.now()
+        self.expires_at = timezone.now() + dt.timedelta(minutes=ttl)
+        self.save(update_fields=["code_hash", "sends", "attempts",
+                                 "last_sent_at", "expires_at"])
+        return code, None
+
+    def verify(self, code):
+        """Returns (ok, message) — the same shape as EmailOTP.verify."""
         if self.is_used:
             return False, "This code has already been used."
         if self.is_expired:

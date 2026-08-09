@@ -1,0 +1,56 @@
+<!--
+  Shown above every page a guardian can reach. Two jobs:
+
+  1. Say whose record this is. A guardian with one child still benefits — the
+     dashboard otherwise reads as if it were about them.
+  2. Switch between children, when there is more than one.
+
+  `guardian_children` comes from the site context processor rather than each
+  view, so the bar cannot go missing on a page someone forgot to update. It is
+  an empty list for a guardian with a single child, which is what collapses the
+  switcher down to a plain label.
+-->
+<div class="card mb-3 border-primary-subtle">
+  <div class="card-body py-2 d-flex align-items-center gap-3 flex-wrap">
+    <div class="ga-avatar sm bg-grad-2 text-white">
+      <i class="fa-solid fa-user-graduate"></i></div>
+    <div class="min-w-0">
+      <div class="fw-600 text-truncate">
+        {% if guardian_child %}{{ guardian_child.name }}{% else %}No student linked{% endif %}</div>
+      <small class="text-muted-2">
+        {% if guardian_child %}
+          {{ guardian_child.class_roll|default:"—" }} ·
+          {{ guardian_child.batch.label }} · {{ guardian_child.department.name }}
+        {% endif %}
+      </small>
+    </div>
+
+    {% if guardian_children %}
+    <div class="dropdown ms-auto">
+      <button class="btn btn-light btn-sm dropdown-toggle" data-bs-toggle="dropdown">
+        <i class="fa-solid fa-arrow-right-arrow-left me-1"></i>Switch student
+      </button>
+      <!--
+        The click is handled by a delegated listener in app.js, not by a
+        script here: this partial renders inside <main>, and jQuery is not
+        loaded until the bottom of the page.
+      -->
+      <ul class="dropdown-menu dropdown-menu-end shadow-sm" id="ga-child-menu"
+          data-switch-url="{% url 'accounts:api_guardian_switch_child' %}">
+        {% for c in guardian_children %}
+        <li><button class="dropdown-item{% if c.current %} active{% endif %}"
+                    data-student="{{ c.id }}">
+          <div class="fw-600">{{ c.name }}</div>
+          <small class="{% if c.current %}text-white-50{% else %}text-muted-2{% endif %}">{{ c.detail }}</small>
+        </button></li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% else %}
+    <span class="ms-auto"></span>
+    {% endif %}
+
+    <span class="ga-pill pill-blue" title="Guardian accounts cannot change anything">
+      <i class="fa-solid fa-eye me-1"></i>View only</span>
+  </div>
+</div>

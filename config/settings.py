@@ -107,6 +107,10 @@ MIDDLEWARE = [
     # an earlier step to finish, and two gates redirecting at each other would
     # trap them in a loop.
     "accounts.middleware.ForceFaceEnrolmentMiddleware",
+    # After the two gates above, which only ever act on students: a guardian
+    # passes straight through both, and this resolves which child they are
+    # looking at before any view runs.
+    "accounts.middleware.GuardianChildMiddleware",
     "accounts.middleware.ActivityTrackingMiddleware",
     "core.middleware.AjaxExceptionMiddleware",
 ]
@@ -310,13 +314,19 @@ EMAIL_MAX_WORKERS = env_int("EMAIL_MAX_WORKERS", 0)
 # --------------------------------------------------------------------------- #
 ATTENDANCE = {
     # geo-fence radius in metres between teacher and student
-    "DEFAULT_RADIUS_M": env_int("ATTENDANCE_DEFAULT_RADIUS_M", 50),
-    "MIN_RADIUS_M": env_int("ATTENDANCE_MIN_RADIUS_M", 10),
-    "MAX_RADIUS_M": env_int("ATTENDANCE_MAX_RADIUS_M", 500),
+    "DEFAULT_RADIUS_M": env_int("ATTENDANCE_DEFAULT_RADIUS_M", 20),
+    "MIN_RADIUS_M": env_int("ATTENDANCE_MIN_RADIUS_M", 5),
+    # A ceiling, not a suggestion — the server refuses anything larger. 50 m is
+    # about a large lecture hall. Beyond that the fence stops distinguishing
+    # "in the room" from "in the corridor", which is the only thing it does.
+    "MAX_RADIUS_M": env_int("ATTENDANCE_MAX_RADIUS_M", 20),
     # link validity
     "DEFAULT_EXPIRY_MIN": env_int("ATTENDANCE_DEFAULT_EXPIRY_MIN", 5),
-    "MIN_EXPIRY_MIN": env_int("ATTENDANCE_MIN_EXPIRY_MIN", 1),
-    "MAX_EXPIRY_MIN": env_int("ATTENDANCE_MAX_EXPIRY_MIN", 180),
+    "MIN_EXPIRY_MIN": env_int("ATTENDANCE_MIN_EXPIRY_MIN", 5),
+    # Also a hard ceiling. A link that outlives the lesson is a link a student
+    # can use from the car park, so the window is bounded to something close to
+    # a class period rather than left to whoever fills the box.
+    "MAX_EXPIRY_MIN": env_int("ATTENDANCE_MAX_EXPIRY_MIN", 30),
     # Reject GPS fixes too fuzzy to be trusted. Keep this at or below the fence
     # radius: a ±200 m fix inside a 50 m fence cannot tell the classroom from
     # the car park, so raising it does not make marking work, it just stops the
@@ -349,6 +359,16 @@ ATTENDANCE = {
     # with no attachment is still a valid reason. 0 files turns it off.
     "ATTACHMENT_MAX_FILES": env_int("ABSENCE_ATTACHMENT_MAX_FILES", 5),
     "ATTACHMENT_MAX_TOTAL_MB": env_int("ABSENCE_ATTACHMENT_MAX_TOTAL_MB", 20),
+    # How long after the link is created a teacher may still mark someone
+    # present by hand. Counted from `created_at`, not from expiry: the point is
+    # that the teacher is still in the room and can see who is in front of them.
+    # Once the class has moved on, "mark present" is a claim about the past that
+    # nobody can check.
+    #
+    # Deliberately longer than the link itself (5 minutes by default) so that a
+    # phone with no signal, a flat battery or a failed face match can still be
+    # sorted out during the lesson. 0 turns manual marking off entirely.
+    "MANUAL_MARK_MINUTES": env_int("ATTENDANCE_MANUAL_MARK_MINUTES", 30),
 }
 
 # --------------------------------------------------------------------------- #
@@ -478,6 +498,15 @@ OTP_TTL_MINUTES = env_int("OTP_TTL_MINUTES", 10)
 OTP_MAX_ATTEMPTS = env_int("OTP_MAX_ATTEMPTS", 5)
 OTP_RESEND_COOLDOWN_SEC = env_int("OTP_RESEND_COOLDOWN_SEC", 60)
 INVITE_TTL_DAYS = env_int("INVITE_TTL_DAYS", 7)
+
+# Guardian sign-in codes, sent over WhatsApp. Separate knobs from the email OTP
+# above because the threat model is different: this code is the *entire*
+# credential for a guardian, where an email code lands in a mailbox that has a
+# password of its own. Shorter life, and a hard ceiling on how many messages
+# one number can be made to receive.
+PHONE_OTP_TTL_MINUTES = env_int("PHONE_OTP_TTL_MINUTES", 5)
+PHONE_OTP_RESEND_SECONDS = env_int("PHONE_OTP_RESEND_SECONDS", 60)
+PHONE_OTP_MAX_SENDS = env_int("PHONE_OTP_MAX_SENDS", 5)
 
 MESSAGE_STORAGE = "django.contrib.messages.storage.session.SessionStorage"
 

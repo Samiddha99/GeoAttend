@@ -9,20 +9,26 @@ from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.decorators.http import require_GET
 
 from academics.selectors import batches_for, departments_for, subjects_for, teachers_for
+from accounts.guardians import acting_profile
 from attendance.models import AttendanceSession
-from core.decorators import role_required
+from core.decorators import guardian_readonly, role_required
 from core.http import fail, ok
 
 from .filters import ReportFilters
 from . import services as svc
 
-HEAD, HOD, TEACHER, STUDENT = "HEAD", "HOD", "TEACHER", "STUDENT"
+HEAD, HOD, TEACHER, STUDENT, GUARDIAN = (
+    "HEAD", "HOD", "TEACHER", "STUDENT", "GUARDIAN")
 
 TEMPLATE_BY_ROLE = {
     HEAD: "dashboard/analytics.html",
     HOD: "dashboard/analytics.html",
     TEACHER: "dashboard/analytics.html",
     STUDENT: "dashboard/student.html",
+    # The same screen a student sees. Rendering a second, near-identical
+    # template would mean every future change to the student dashboard had to
+    # be made twice, and the copy that got forgotten would be the guardian's.
+    GUARDIAN: "dashboard/student.html",
 }
 
 
@@ -50,6 +56,13 @@ def home(request):
         # Shown to the student so the deadline is stated rather than implied.
         "reason_window_days": settings.ATTENDANCE.get("ABSENCE_REASON_DAYS", 3),
     }
+    if request.user.is_guardian:
+        # The student templates ask "is this mine or am I watching?" in a few
+        # places. One flag rather than `user.is_guardian` scattered through the
+        # markup, and the child's name so the page can say whose record it is.
+        child = acting_profile(request.user)
+        context["viewing_child"] = child
+        context["read_only"] = True
     if request.user.is_teacher:
         context["open_sessions"] = AttendanceSession.objects.filter(
             teacher=request.user, status=AttendanceSession.Status.OPEN,
@@ -167,8 +180,10 @@ def api_low_attendance(request):
 @require_GET
 def api_student_detail(request, pk=None):
     f = ReportFilters.from_request(request)
-    if request.user.is_student:
-        student = getattr(request.user, "student_profile", None)
+    if request.user.is_student or request.user.is_guardian:
+        # `pk` is ignored for these two roles — the record they may read is
+        # decided by who they are, never by what they ask for.
+        student = acting_profile(request.user)
         if student is None:
             return fail("Your student profile is not set up yet.", status=404)
     else:
@@ -176,11 +191,12 @@ def api_student_detail(request, pk=None):
     return ok(svc.student_detail(request.user, f, student))
 
 
-@role_required(STUDENT)
+@role_required(STUDENT, GUARDIAN)
+@guardian_readonly
 @require_GET
 def api_my_summary(request):
     f = ReportFilters.from_request(request)
-    student = getattr(request.user, "student_profile", None)
+    student = acting_profile(request.user)
     if student is None:
         return fail("Your student profile is not set up yet.", status=404)
     data = svc.student_detail(request.user, f, student)

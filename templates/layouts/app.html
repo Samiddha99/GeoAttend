@@ -50,19 +50,32 @@
             <i class="fa-solid fa-chevron-down fs-12 text-muted-2"></i>
           </button>
           <ul class="dropdown-menu dropdown-menu-end shadow-sm">
-            <li><h6 class="dropdown-header">{{ user.email }}</h6></li>
+            <!--
+              A guardian's synthetic email (guardian.+9198…@guardian.invalid)
+              is an implementation detail and would only confuse; show the
+              number they actually signed in with.
+            -->
+            <li><h6 class="dropdown-header">
+              {% if user.is_guardian %}{{ user.guardian_mobile }}{% else %}{{ user.email }}{% endif %}</h6></li>
+            {% if user.is_guardian %}
+            <li><h6 class="dropdown-header pt-0 text-muted-2">Guardian · view only</h6></li>
+            {% else %}
             <li><a class="dropdown-item" href="{% url 'accounts:profile' %}"><i class="fa-solid fa-user me-2 text-muted-2"></i>My profile</a></li>
+            {% endif %}
             {% if user.is_student %}
             <li><a class="dropdown-item" href="{% url 'attendance:my_attendance' %}"><i class="fa-solid fa-calendar-check me-2 text-muted-2"></i>My attendance</a></li>
             {% endif %}
             <li><hr class="dropdown-divider"></li>
-            <li><a class="dropdown-item text-danger" href="{% url 'accounts:logout' %}"><i class="fa-solid fa-right-from-bracket me-2"></i>Sign out</a></li>
+            <li><a class="dropdown-item text-danger"
+                   href="{% if user.is_guardian %}{% url 'accounts:guardian_logout' %}{% else %}{% url 'accounts:logout' %}{% endif %}">
+              <i class="fa-solid fa-right-from-bracket me-2"></i>Sign out</a></li>
           </ul>
         </div>
       </div>
     </header>
 
     <main class="ga-content">
+      {% if user.is_guardian %}{% include "partials/guardian_bar.html" %}{% endif %}
       {% block content %}{% endblock %}
     </main>
 
