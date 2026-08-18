@@ -8,11 +8,17 @@ from accounts.models import EmailOTP, Institute, Invitation, User
 
 
 class InstituteSignupTests(TestCase):
+    # Registration now also asks where the institute is and what it teaches.
+    # Autonomous here on purpose: this test is about the OTP handshake, and an
+    # affiliated institute would land in PENDING and never sign in — which is
+    # correct behaviour, and covered in test_signup_places.py.
     payload = {
         "institute_name": "Test College", "institute_code": "TC",
         "institute_email": "office@tc.edu", "head_name": "Dr. Head",
         "head_email": "head@tc.edu", "password1": "Str0ngPass!23",
         "password2": "Str0ngPass!23",
+        "state": "Kerala", "district": "Ernakulam",
+        "disciplines": ["ENGG"], "affiliation_ENGG": "AUTONOMOUS",
     }
 
     def test_signup_requires_otp_and_creates_institute(self):
@@ -35,6 +41,11 @@ class InstituteSignupTests(TestCase):
         head = User.objects.get(email="head@tc.edu")
         self.assertEqual(head.role, User.Role.HEAD)
         self.assertTrue(head.registration_completed)
+        institute = Institute.objects.get(code="TC")
+        self.assertEqual(institute.state, "Kerala")
+        self.assertEqual(institute.district, "Ernakulam")
+        # Autonomous, so nobody had to approve it.
+        self.assertEqual(institute.status, Institute.Status.APPROVED)
 
     def test_duplicate_email_rejected(self):
         User.objects.create_user(email="head@tc.edu", password="x", role="HEAD")

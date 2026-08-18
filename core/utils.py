@@ -4,6 +4,12 @@ import hashlib
 import math
 import re
 import secrets
+import base64
+import hmac
+import time
+import datetime
+import random, requests
+from django.conf import settings
 
 from django.utils import timezone
 
@@ -115,3 +121,50 @@ def device_fingerprint(request, client_hash=""):
     """
     ua = request.META.get("HTTP_USER_AGENT", "")[:400]
     return sha256(f"{ua}|{client_hash}")[:64]
+
+
+
+def PAN_verification(PAN_no, name, dob):
+    developer_key = settings.KYC_VERIFICATION_DEVELOPER_KEY
+    access_key = settings.KYC_VERIFICATION_ACCESS_KEY
+    # 1. Base64 encode the access key
+    encoded_key = base64.b64encode(access_key.encode('utf-8'))
+    
+    # 2. Get current timestamp in milliseconds (must match the header)
+    timestamp = str(int(time.time() * 1000))
+    
+    # 3. Compute HMAC-SHA256 signature 
+    signature = hmac.new(
+        key=encoded_key, 
+        msg=timestamp.encode('utf-8'), 
+        digestmod=hashlib.sha256
+    ).digest()
+    
+    # 4. Base64 encode the final raw signature
+    secret_key = base64.b64encode(signature).decode('utf-8')
+    
+    headers = {
+        "developer_key": developer_key,
+        "secret-key": secret_key,
+        "secret-key-timestamp": timestamp,
+        "content-type": "application/json"
+    }
+
+    timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+    random_suffix = str(random.randint(10000, 99999))
+    client_ref_id = timestamp + random_suffix
+
+    payload = {
+        "initiator_id": "9962981729",
+        "client_ref_id": client_ref_id, # Note: Ensure this is unique per request
+        "pan_number": PAN_no,
+        "name": name,
+        "dob": dob, # 1994-08-29
+    }
+    # url = "https://staging.eko.in/ekoapi/v3/tools/kyc/pan-lite"
+    # response = requests.post(url, json=payload, headers=headers)
+    # data = response.json()
+    # print(data)
+    return {
+        'verified': True
+    }

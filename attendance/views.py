@@ -61,8 +61,8 @@ from .services import (
     submit_planned_absence,
 )
 
-HEAD, HOD, TEACHER, STUDENT, GUARDIAN = (
-    "HEAD", "HOD", "TEACHER", "STUDENT", "GUARDIAN")
+HEAD, HOD, TEACHER, STUDENT, GUARDIAN, UNIVERSITY = (
+    "HEAD", "HOD", "TEACHER", "STUDENT", "GUARDIAN", "UNIVERSITY")
 CONF_FACE = settings.FACE
 
 
@@ -83,8 +83,12 @@ def _viewing_context(request):
 def _visible_sessions(user):
     # Sessions belonging to an archived batch disappear along with the batch.
     qs = AttendanceSession.objects.select_related(
-        "subject", "batch", "teacher", "batch__department"
+        "subject", "batch", "section", "teacher", "batch__department"
     ).filter(batch__is_active=True)
+    if user.is_university:
+        from accounts.scoping import institutes_for
+
+        return qs.filter(subject__department__institute__in=institutes_for(user))
     if user.is_head:
         return qs.filter(subject__department__institute=user.institute)
     if user.is_hod:
@@ -110,17 +114,24 @@ def generate_page(request):
     })
 
 
-@role_required(TEACHER, HOD, HEAD)
+@role_required(TEACHER, HOD, HEAD, UNIVERSITY)
 @ensure_csrf_cookie
 def sessions_page(request):
+    from academics.selectors import semester_options
+
     today = timezone.localdate()
     return render(request, "attendance/sessions.html", {
         "default_start": f"{today.year}-01-01",
         "default_end": today.isoformat(),
+        # The semesters that actually exist in this user's scope, each once —
+        # `semester_options` rather than a fixed 1..12, so the dropdown never
+        # offers a filter that can never match. Its docstring records why the
+        # bare `.distinct()` this replaced returned "Semester 3" twice.
+        "semesters": semester_options(request.user),
     })
 
 
-@role_required(TEACHER, HOD, HEAD)
+@role_required(TEACHER, HOD, HEAD, UNIVERSITY)
 @ensure_csrf_cookie
 def session_detail_page(request, pk):
     session = get_object_or_404(_visible_sessions(request.user), pk=pk)
@@ -158,10 +169,34 @@ def api_teacher_batches(request):
 @role_required(TEACHER)
 @require_GET
 def api_batch_subjects(request, batch_id):
+    """
+    Subjects this teacher may take for one group, with its head-count.
+
+    **Narrowed by section, not just batch.** `?section=<id>` asks about one
+    section; omitting it asks about the whole batch. The two give different
+    answers on purpose: somebody allocated section A only should not see the
+    subject offered for the whole cohort, and the enrolled count has to be the
+    number who will actually be in the room.
+
+    The sections themselves ride along, so the picker can offer them without a
+    second request.
+    """
+    from academics.allocation import can_teach
+    from academics.models import Section
+
     batch = get_object_or_404(batches_for(request.user), pk=batch_id)
-    subjects = teacher_subjects_for_batch(request.user, batch)
+    section_id = (request.GET.get("section") or "").strip()
+    section = (get_object_or_404(Section, pk=clean_object_id(section_id),
+                                 batch=batch)
+               if section_id else None)
+
     rows = []
-    for s in subjects:
+    for s in teacher_subjects_for_batch(request.user, batch):
+        # Asked per subject because an allocation is per (subject, batch,
+        # section): a teacher can hold the whole batch for one paper and a
+        # single section for another.
+        if not can_teach(request.user, s, batch, section):
+            continue
         rows.append({
             "id": s.id,
             "code": s.code,
@@ -169,21 +204,35 @@ def api_batch_subjects(request, batch_id):
             "subject_type": s.subject_type,
             "degree": s.degree,
             "semester": s.semester,
-            "enrolled": enrolled_students(s, batch).count(),
+            "enrolled": enrolled_students(s, batch, section).count(),
         })
-    return ok({"rows": rows, "batch": {"id": batch.id, "label": batch.label}})
+    sections = [{"id": str(x.id), "name": x.name}
+                for x in Section.objects.filter(batch=batch, is_active=True)]
+    return ok({"rows": rows, "sections": sections,
+               "batch": {"id": batch.id, "label": batch.label,
+                         "department": batch.department.code}})
 
 
 @role_required(TEACHER)
 @require_POST
 def api_session_create(request):
+    from academics.models import Section
+
     batch = get_object_or_404(batches_for(request.user), pk=request.POST.get("batch"))
     subject = get_object_or_404(Subject, pk=request.POST.get("subject"))
+    # Blank means the whole batch, as it does everywhere. Fetched within the
+    # batch, so a stale id from another cohort is a 404 here rather than a
+    # coherence error three layers down.
+    section_id = (request.POST.get("section") or "").strip()
+    section = (get_object_or_404(Section, pk=clean_object_id(section_id),
+                                 batch=batch)
+               if section_id else None)
     try:
         session = create_session(
             teacher=request.user,
             subject=subject,
             batch=batch,
+            section=section,
             latitude=request.POST.get("latitude"),
             longitude=request.POST.get("longitude"),
             accuracy=request.POST.get("accuracy") or 0,
@@ -194,11 +243,23 @@ def api_session_create(request):
     except AttendanceError as exc:
         return fail(exc.message, status=exc.status, code=exc.code)
 
+    # **Defaults to not sending.** It used to default to sending, so a caller
+    # that simply did not mention `notify` emailed the whole class — and the
+    # only way to be quiet was to remember to say so. Silence should mean the
+    # quieter outcome, not thirty emails.
+    #
+    # Nothing is withheld from the student by this: the same link is on their
+    # dashboard either way (dashboard/views.api_my_summary), and the teacher
+    # can still send it from the session screen afterwards.
     emailed = 0
-    if request.POST.get("notify", "1") == "1":
+    notify = request.POST.get("notify", "0") == "1"
+    if notify:
         emailed = notify_session(session)
-    ActivityLog.log(request, action="SESSION_CREATED",
-                    detail=f"{subject.code} · {batch.label} · {session.expected_count} students")
+    ActivityLog.log(
+        request, action="SESSION_CREATED",
+        detail=(f"{subject.code} · {batch.label} · "
+                f"{session.expected_count} students · "
+                f"{'emailed' if notify else 'no email'}"))
     return ok({
         "id": session.id,
         "token": session.token,
@@ -211,16 +272,24 @@ def api_session_create(request):
         "radius": session.radius_m,
         "subject": f"{subject.code} — {subject.name}",
         "batch": batch.label,
+        # Blank when the session is for the whole batch — the screens print it
+        # beside the batch label, and "2022-26 · " with nothing after it reads
+        # like a bug.
+        "section": session.section.name if session.section_id else "",
+        "department": subject.department.code,
     }, message=f"Attendance link is live for {session.expected_count} students.")
 
 
-@role_required(TEACHER, HOD, HEAD)
+@role_required(TEACHER, HOD, HEAD, UNIVERSITY)
 @require_GET
 def api_session_status(request, pk):
     session = get_object_or_404(_visible_sessions(request.user), pk=pk)
     records = session.records.select_related("student", "student__user").order_by("-marked_at")
     present_ids = {r.student_id for r in records}
-    roster = enrolled_students(session.subject, session.batch)
+    # `session.section` — not just the batch. A register opened for section A
+    # lists section A; without this the "absent" tab would name every student
+    # in the cohort who was never expected to be in the room.
+    roster = enrolled_students(session.subject, session.batch, session.section)
     present = [{
         "student_id": r.student_id,
         "name": r.student.name,
@@ -282,7 +351,7 @@ def api_session_status(request, pk):
     })
 
 
-@role_required(TEACHER, HOD, HEAD)
+@role_required(TEACHER, HOD, HEAD, UNIVERSITY)
 @require_POST
 def api_session_action(request, pk, action):
     session = get_object_or_404(_visible_sessions(request.user), pk=pk)
@@ -328,7 +397,7 @@ def api_session_action(request, pk, action):
               message=message)
 
 
-@role_required(TEACHER, HOD, HEAD)
+@role_required(TEACHER, HOD, HEAD, UNIVERSITY)
 @require_POST
 def api_manual_mark(request, pk):
     session = get_object_or_404(_visible_sessions(request.user), pk=pk)
@@ -346,7 +415,7 @@ def api_manual_mark(request, pk):
     return ok(message=message)
 
 
-@role_required(TEACHER, HOD, HEAD, STUDENT)
+@role_required(TEACHER, HOD, HEAD, STUDENT, UNIVERSITY)
 @require_GET
 def api_sessions(request):
     qs = _visible_sessions(request.user).annotate(
@@ -378,6 +447,13 @@ def api_sessions(request):
     degree = (request.GET.get("degree") or "").strip().upper()
     if degree in Degree.values:
         qs = qs.filter(subject__degree=degree)
+    # The subject's semester, not the session's — a session has no semester of
+    # its own. Same reading the Teachers page's semester filter already uses.
+    # A non-numeric value is ignored rather than matched, so a stale bookmark
+    # shows everything instead of an empty list that reads like "no classes".
+    semester = (request.GET.get("semester") or "").strip()
+    if semester.isdigit():
+        qs = qs.filter(subject__semester=int(semester))
     status = request.GET.get("status")
     if status == "OPEN":
         qs = qs.filter(status=AttendanceSession.Status.OPEN, expires_at__gt=timezone.now())
@@ -390,7 +466,14 @@ def api_sessions(request):
         "subject_name": s.subject.name,
         "subject_type": s.subject.subject_type,
         "degree": s.subject.degree,
+        "semester": s.subject.semester,
         "batch": s.batch.label,
+        # Empty when the class was for the whole batch — see
+        # academics/allocation.py, where null section means exactly that. The
+        # column prints an em dash for it rather than a blank, because "the
+        # whole batch" is a real answer and a gap reads as missing data.
+        "section": s.section.name if s.section_id else "",
+        "institute": s.subject.department.institute.name,
         "teacher": s.teacher.full_name or s.teacher.email,
         "expected": s.expected_count,
         "present": s.marked,
@@ -407,7 +490,7 @@ def api_sessions(request):
     return ok({"rows": rows})
 
 
-@role_required(TEACHER, HOD, HEAD)
+@role_required(TEACHER, HOD, HEAD, UNIVERSITY)
 @require_GET
 def api_session_export(request, pk):
     session = get_object_or_404(_visible_sessions(request.user), pk=pk)
@@ -416,12 +499,17 @@ def api_session_export(request, pk):
     fname = f"attendance_{session.subject.code}_{session.session_date}.csv"
     response["Content-Disposition"] = f'attachment; filename="{fname}"'
     writer = csv.writer(response)
-    writer.writerow(["Class Roll", "Exam Roll", "Name", "Email", "Status",
-                     "Marked At", "Distance (m)", "Remark"])
-    for student in enrolled_students(session.subject, session.batch):
+    writer.writerow(["Class Roll", "Exam Roll", "Name", "Email", "Section",
+                     "Status", "Marked At", "Distance (m)", "Remark"])
+    # Scoped to the session's section, like the screen it mirrors. Exporting
+    # the whole cohort for a section's register would mark forty students
+    # ABSENT from a class they were never in — a file that then goes to a HoD.
+    for student in enrolled_students(session.subject, session.batch,
+                                     session.section):
         rec = present.get(student.id)
         writer.writerow([
             student.class_roll, student.exam_roll, student.name, student.email,
+            student.section.name if student.section_id else "",
             "PRESENT" if rec else "ABSENT",
             timezone.localtime(rec.marked_at).strftime("%Y-%m-%d %H:%M:%S") if rec else "",
             round(rec.distance_m, 1) if rec and rec.distance_m is not None else "",
@@ -430,7 +518,7 @@ def api_session_export(request, pk):
     return response
 
 
-@role_required(TEACHER, HOD, HEAD)
+@role_required(TEACHER, HOD, HEAD, UNIVERSITY)
 @require_GET
 def api_session_attempts(request, pk):
     session = get_object_or_404(_visible_sessions(request.user), pk=pk)
@@ -592,6 +680,7 @@ def _reason_row(r, *, for_reviewer=False):
             "class_roll": r.student.class_roll,
             "email": r.student.email,
             "department": r.student.department.name,
+            "institute": r.student.department.institute.name,
             "teacher": r.session.teacher.full_name or r.session.teacher.email,
         })
     return row
@@ -670,7 +759,7 @@ def api_absence_reason_submit(request, pk):
               message="Reason submitted. Your teacher will review it.")
 
 
-@role_required(HEAD, HOD, TEACHER, STUDENT, GUARDIAN)
+@role_required(HEAD, HOD, TEACHER, STUDENT, GUARDIAN, UNIVERSITY)
 @guardian_readonly
 @require_GET
 def api_absence_reasons(request):
@@ -684,7 +773,7 @@ def api_absence_reasons(request):
     qs = AbsenceReason.objects.select_related(
         "session", "session__subject", "session__subject__department",
         "session__batch", "session__teacher", "student", "student__user",
-        "student__department", "reviewed_by",
+        "student__department", "student__department__institute", "reviewed_by",
     ).prefetch_related("attachments")
     user = request.user
     if user.is_student or user.is_guardian:
@@ -720,7 +809,7 @@ def api_absence_reasons(request):
     })
 
 
-@role_required(HEAD, HOD, TEACHER)
+@role_required(HEAD, HOD, TEACHER, UNIVERSITY)
 @require_POST
 def api_absence_reason_review(request, pk):
     reason = get_object_or_404(
@@ -741,7 +830,7 @@ def api_absence_reason_review(request, pk):
               message=f"Reason {reason.get_status_display().lower()}.")
 
 
-@role_required(HEAD, HOD, TEACHER)
+@role_required(HEAD, HOD, TEACHER, UNIVERSITY)
 @ensure_csrf_cookie
 def absence_reasons_page(request):
     return render(request, "attendance/absence_reasons.html", {
@@ -860,7 +949,7 @@ def api_planned_absence_cancel(request, pk):
     return ok(message="Planned absence cancelled.")
 
 
-@role_required(HEAD, HOD, TEACHER, STUDENT, GUARDIAN)
+@role_required(HEAD, HOD, TEACHER, STUDENT, GUARDIAN, UNIVERSITY)
 @guardian_readonly
 @require_GET
 def api_planned_absences(request):
@@ -899,7 +988,7 @@ def api_planned_absences(request):
     })
 
 
-@role_required(HEAD, HOD, TEACHER)
+@role_required(HEAD, HOD, TEACHER, UNIVERSITY)
 @require_POST
 def api_planned_decision_review(request, pk):
     decision = get_object_or_404(
@@ -957,7 +1046,7 @@ def api_mark_start(request, token):
     }, message="You are in the classroom. Now let us check it is you.")
 
 
-@role_required(TEACHER, HOD, HEAD)
+@role_required(TEACHER, HOD, HEAD, UNIVERSITY)
 @require_POST
 def api_manual_request_decide(request, pk):
     """The teacher's answer to "the camera does not know me"."""
@@ -979,7 +1068,7 @@ def api_manual_request_decide(request, pk):
     return ok(message=f"{manual.student.name}: {manual.get_status_display().lower()}.")
 
 
-@role_required(HEAD, HOD, TEACHER, STUDENT, GUARDIAN)
+@role_required(HEAD, HOD, TEACHER, STUDENT, GUARDIAN, UNIVERSITY)
 @guardian_readonly
 @require_GET
 def api_attachment_download(request, pk):

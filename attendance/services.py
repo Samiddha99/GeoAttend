@@ -85,18 +85,30 @@ def _bounded(value, key, label, unit, code):
     return number
 
 
-def create_session(*, teacher, subject, batch, latitude, longitude, accuracy=0,
-                   minutes=None, radius=None, note=""):
+def create_session(*, teacher, subject, batch, section=None, latitude, longitude,
+                   accuracy=0, minutes=None, radius=None, note=""):
+    """
+    Open an attendance link for one group — (subject, batch, section).
+
+    `section=None` means the whole batch, the same as everywhere else. The
+    permission check and the audience both come from `academics.allocation`, so
+    "who may open this" and "who may mark it" cannot answer differently.
+    """
+    from academics.allocation import AllocationError, assert_can_teach, assert_coherent
+
     if not batch.is_active:
         raise AttendanceError(
             f"Batch {batch.label} is archived. Re-activate it before taking attendance.",
             "BATCH_ARCHIVED", 409,
         )
-    if not can_teach(teacher, subject, batch):
-        raise AttendanceError(
-            "You are not assigned to teach this subject to this batch.",
-            "NOT_ASSIGNED", 403,
-        )
+    try:
+        # Coherence first: a section from another batch is a stale dropdown,
+        # not a permission problem, and saying "you are not assigned" to that
+        # sends the teacher looking in the wrong place.
+        assert_coherent(subject, batch, section)
+        assert_can_teach(teacher, subject, batch, section)
+    except AllocationError as exc:
+        raise AttendanceError(str(exc), "NOT_ASSIGNED", 403) from exc
     if not valid_coords(latitude, longitude):
         raise AttendanceError(
             "We could not read your location. Please allow location access and try again.",
@@ -106,16 +118,22 @@ def create_session(*, teacher, subject, batch, latitude, longitude, accuracy=0,
     minutes = _bounded(minutes, "EXPIRY_MIN", "Validity", "minutes", "BAD_EXPIRY")
     radius = _bounded(radius, "RADIUS_M", "Radius", "metres", "BAD_RADIUS")
 
-    audience = enrolled_students(subject, batch)
+    audience = enrolled_students(subject, batch, section)
     if not audience.exists():
+        where = batch.label + (f" · {section.name}" if section else "")
         raise AttendanceError(
-            "No registered students are enrolled in this subject for this batch.",
+            f"No registered students are enrolled in {subject.code} for "
+            f"{where}.",
             "NO_AUDIENCE",
         )
 
-    # Close any still-open session for the same subject+batch to avoid double links.
+    # Close any still-open session for the same *group*. Scoped by section as
+    # well now: two teachers taking sections A and B of one subject at the same
+    # hour is an ordinary timetable, and closing one because the other started
+    # would have cancelled a live register out from under somebody.
     AttendanceSession.objects.filter(
-        subject=subject, batch=batch, status=AttendanceSession.Status.OPEN,
+        subject=subject, batch=batch, section=section,
+        status=AttendanceSession.Status.OPEN,
         expires_at__gt=timezone.now(),
     ).update(status=AttendanceSession.Status.CLOSED, closed_at=timezone.now())
 
@@ -123,6 +141,7 @@ def create_session(*, teacher, subject, batch, latitude, longitude, accuracy=0,
         teacher=teacher,
         subject=subject,
         batch=batch,
+        section=section,
         latitude=round(float(latitude), 6),
         longitude=round(float(longitude), 6),
         accuracy_m=float(accuracy or 0),
@@ -141,9 +160,43 @@ def create_session(*, teacher, subject, batch, latitude, longitude, accuracy=0,
     return session
 
 
+def audience_refusal(session, profile):
+    """
+    Why this student is not in this class, or None.
+
+    **One definition, three callers** — marking, manual marking and submitting
+    an absence reason all ask it. They used to each spell out "same batch, and
+    enrolled", and the moment sections arrived that was three places to
+    remember a third clause. The one that got forgotten would be the one a
+    student found.
+
+    Ordered widest first, so the answer names the outermost thing that is wrong
+    rather than a detail inside it.
+    """
+    if profile.batch_id != session.batch_id:
+        return (f"This attendance request is for batch {session.batch.label}, "
+                f"not yours.", "WRONG_BATCH")
+    if session.section_id is not None and profile.section_id != session.section_id:
+        # A whole-batch session (`section_id is None`) reaches everybody in the
+        # batch, including students in no section — that is what null means.
+        return (f"This attendance request is for section "
+                f"{session.section.name}, not yours.", "WRONG_SECTION")
+    if not is_enrolled(profile, session.subject):
+        return (f"You are not enrolled in {session.subject.code}.",
+                "NOT_ENROLLED")
+    return None
+
+
 def notify_session(session):
     """
     Email the mark-link to every enrolled, activated student.
+
+    **Only when the teacher asks.** This does not run on its own any more:
+    `api_session_create` calls it only if the box was ticked, and it defaults
+    to unticked. The resend action on the session screen is the other caller,
+    and that one is always a deliberate click. Students who are not emailed
+    are not left out — the same link is on their dashboard either way, from
+    `dashboard.views.api_my_summary`.
 
     Goes through the project's single mail function. Sends are queued rather
     than awaited: the teacher is standing in front of a class waiting for the
@@ -152,11 +205,16 @@ def notify_session(session):
     from notifications.mailer import send_template_mail
 
     sent = 0
-    for student in enrolled_students(session.subject, session.batch):
+    # The session's own section. Emailing the whole cohort a link only section
+    # A can use would send forty students to a page that refuses them.
+    where = session.batch.label + (f" · {session.section.name}"
+                                   if session.section_id else "")
+    for student in enrolled_students(session.subject, session.batch,
+                                     session.section):
         if not student.user.registration_completed:
             continue
         send_template_mail(
-            f"Attendance open: {session.subject.code} ({session.batch.label})",
+            f"Attendance open: {session.subject.code} ({where})",
             student.user.email,
             "attendance_request",
             {
@@ -237,12 +295,16 @@ def check_mark_allowed(*, request, session, latitude, longitude, accuracy=None,
              "attendance.", "BATCH_ARCHIVED", MarkAttempt.Reason.BATCH_ARCHIVED, 410)
 
     # --- is it meant for this student? ------------------------------------- #
-    if profile.batch_id != session.batch_id:
-        boom(f"This attendance request is for batch {session.batch.label}, not yours.",
-             "WRONG_BATCH", MarkAttempt.Reason.WRONG_BATCH, 403)
-    if not is_enrolled(profile, session.subject):
-        boom(f"You are not enrolled in {session.subject.code}.", "NOT_ENROLLED",
-             MarkAttempt.Reason.NOT_ENROLLED, 403)
+    # Batch, section and enrolment, from the one definition — see
+    # `audience_refusal`. A wrong section is logged as WRONG_BATCH rather than
+    # a new attempt reason: to the student it is the same mistake, and the
+    # message names the section.
+    refusal = audience_refusal(session, profile)
+    if refusal is not None:
+        message, code = refusal
+        boom(message, code,
+             MarkAttempt.Reason.NOT_ENROLLED if code == "NOT_ENROLLED"
+             else MarkAttempt.Reason.WRONG_BATCH, 403)
     if AttendanceRecord.objects.filter(session=session, student=profile).exists():
         boom("Your attendance for this class is already marked.", "DUPLICATE",
              MarkAttempt.Reason.DUPLICATE, 409)
@@ -390,8 +452,13 @@ def check_manual_window(session):
 def manual_mark(*, session, student, teacher, present=True, remark=""):
     if session.teacher_id != teacher.id and not (teacher.is_hod or teacher.is_head):
         raise AttendanceError("You can only edit your own sessions.", "FORBIDDEN", 403)
-    if not is_enrolled(student, session.subject) or student.batch_id != session.batch_id:
-        raise AttendanceError("That student is not in this class.", "NOT_ENROLLED", 400)
+    refusal = audience_refusal(session, student)
+    if refusal is not None:
+        # Rephrased for the teacher: `audience_refusal` speaks to the student
+        # ("not yours"), and the same sentence read by staff about somebody
+        # else is confusing.
+        raise AttendanceError("That student is not in this class.",
+                              refusal[1], 400)
     if present:
         check_manual_window(session)
         record, created = AttendanceRecord.objects.update_or_create(
@@ -600,11 +667,10 @@ def submit_absence_reason(*, student, session, text, files=None):
     if len(text) > 1000:
         raise AttendanceError("Please keep the reason under 1000 characters.", "TOO_LONG")
 
-    if session.batch_id != student.batch_id:
-        raise AttendanceError("That class was not for your batch.", "WRONG_BATCH")
-    if not is_enrolled(student, session.subject):
-        raise AttendanceError(
-            f"You are not enrolled in {session.subject.code}.", "NOT_ENROLLED")
+    refusal = audience_refusal(session, student)
+    if refusal is not None:
+        message, code = refusal
+        raise AttendanceError(message, code)
 
     record = AttendanceRecord.objects.filter(session=session, student=student).first()
     if record and record.is_present:

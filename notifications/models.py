@@ -1,4 +1,5 @@
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import models
 
 from academics.models import StudentProfile, Subject
@@ -34,8 +35,19 @@ class WhatsAppTemplate(models.Model):
     #: Statuses that mean "usable for sending right now".
     SENDABLE = {Status.APPROVED}
 
+    # A template belongs to exactly one owner: an institute, or a university.
+    # Nullable on both sides rather than a generic relation, because the two
+    # are the only owners there will ever be and a GenericForeignKey would
+    # cost every query a join it does not need.
+    university = models.ForeignKey(
+        "accounts.University", on_delete=models.CASCADE, null=True, blank=True,
+        related_name="whatsapp_templates")
+    # Nullable now that a university can own a template instead. Exactly one
+    # of `institute` / `university` is set — enforced in `save()` rather than
+    # by a database constraint, because MongoDB has none. See the note there.
     institute = models.ForeignKey(
-        Institute, on_delete=models.CASCADE, related_name="whatsapp_templates")
+        Institute, on_delete=models.CASCADE, related_name="whatsapp_templates",
+        null=True, blank=True)
     audience = models.CharField(max_length=10, choices=Audience.choices)
     name = models.CharField(max_length=120, help_text="Shown to staff when picking a template.")
     twilio_name = models.SlugField(
@@ -66,10 +78,37 @@ class WhatsAppTemplate(models.Model):
         constraints = [
             models.UniqueConstraint(
                 fields=["institute", "twilio_name"], name="uniq_wa_template_name"),
+            models.UniqueConstraint(
+                fields=["university", "twilio_name"],
+                name="uniq_wa_template_name_university"),
         ]
 
     def __str__(self):
         return f"{self.name} ({self.get_audience_display()}) · {self.status}"
+
+    @property
+    def owner(self):
+        """Whichever of the two owns this template."""
+        return self.university or self.institute
+
+    def clean(self):
+        # "Exactly one owner" would normally be a CheckConstraint, but this
+        # database has no check constraints — Django would silently drop it and
+        # leave a rule that reads as enforced and is not. Enforced here and in
+        # save() instead, so it holds however the row is written. Same shape as
+        # AbsenceAttachment, which has the same problem.
+        #
+        # Both owners set would put an institute's wording in front of a
+        # university; neither would make the template invisible to everyone and
+        # unreachable from either screen.
+        if bool(self.institute_id) == bool(self.university_id):
+            raise ValidationError(
+                "A WhatsApp template belongs to exactly one owner: an "
+                "institute or a university.")
+
+    def save(self, *args, **kwargs):
+        self.clean()
+        return super().save(*args, **kwargs)
 
     @property
     def is_sendable(self):

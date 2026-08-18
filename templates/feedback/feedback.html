@@ -33,6 +33,7 @@ without any way to tell who gave them.{% endblock %}
     <option value="">All teachers</option>
     {% for t in teachers %}<option value="{{ t.id }}">{{ t.get_full_name }}</option>{% endfor %}
   </select>
+  {% include "partials/institute_filter.html" with id="f-institute" width="190px" %}
   {% include "partials/subject_degree_filter.html" with id="f-degree" width="150px" %}
   {% include "partials/subject_type_filter.html" with id="f-subject-type" width="160px" %}
   <select class="form-select form-select-sm" id="f-subject" style="max-width:190px">
@@ -113,6 +114,7 @@ $(function(){
   function killCharts(){ charts.forEach(c => c.destroy()); charts = []; }
 
   const cols = [
+    GA.instituteCol(),
     { key:"date", label:"Class", value:r=>r.date_iso, csv:(v,r)=>r.date, render:(v,r)=>
       '<div>'+GA.esc(r.date)+'</div><small class="text-muted-2">'+GA.esc(r.batch)+'</small>' },
     { key:"subject", label:"Subject", render:(v,r)=>

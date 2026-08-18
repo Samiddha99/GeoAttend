@@ -14,17 +14,31 @@
     <span class="input-group-text"><i class="fa-solid fa-magnifying-glass"></i></span>
     <input class="form-control" id="search" placeholder="Search name or email…">
   </div>
-  {% comment %}
-  Hidden only in a single-department institute, where it could never filter
-  anything. The table spans the whole institute for every staff role.
-  {% endcomment %}
-  <select class="form-select form-select-sm {% if filter_departments|length < 2 %}d-none{% endif %}"
+  <!--
+    Always shown — see students.html. Hiding it below two departments meant
+    archiving one made the control disappear, which looks like a bug rather
+    than a tidy-up.
+  -->
+  <select class="form-select form-select-sm"
           id="f-dept" style="max-width:210px">
     <option value="">All departments</option>
-    {% for d in filter_departments %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}
+    {% for d in filter_departments %}
+    <option value="{{ d.id }}">{{ d.name }}{% if not d.is_active %} (archived){% endif %}</option>
+    {% endfor %}
   </select>
+  {% include "partials/institute_filter.html" with id="f-institute" %}
+  {% include "partials/discipline_filter.html" with id="f-discipline-filter" %}
   {% include "partials/subject_degree_filter.html" with id="f-degree" %}
   {% include "partials/subject_type_filter.html" with id="f-subject-type" %}
+  <!--
+    Semester, read from the teacher's allocations rather than the teacher —
+    they have no semester of their own. Same reading as the two filters above
+    it: teachers who take at least one subject of that semester.
+  -->
+  <select class="form-select form-select-sm" id="f-semester" style="max-width:160px">
+    <option value="">All semesters</option>
+    {% for n in semesters %}<option value="{{ n }}">Semester {{ n }}</option>{% endfor %}
+  </select>
   <select class="form-select form-select-sm" id="f-subject" style="max-width:240px"
           data-all='[{% for s in filter_subjects %}{"id":"{{ s.id }}","code":"{{ s.code|escapejs }}","name":"{{ s.name|escapejs }}","department_id":"{{ s.department_id }}","semester":"{{ s.semester }}","subject_type":"{{ s.subject_type }}","degree":"{{ s.degree }}"}{% if not forloop.last %},{% endif %}{% endfor %}]'>
     <option value="">All subjects</option>
@@ -33,10 +47,12 @@
   <select class="form-select form-select-sm {% if is_student %}d-none{% endif %}"
           id="f-status" style="max-width:180px">
     <option value="">Any status</option>
-    <option value="active">Activated</option>
-    <option value="invited">Invited</option>
-    <option value="deactivated">Deactivated</option>
+    <option value="ACTIVE">Activated</option>
+    <option value="INVITED">Invited</option>
+    <option value="ARCHIVED">Deactivated</option>
     <option value="unassigned">No subjects allocated</option>
+    <option value="revoked">Revoked discipline</option>
+    <option value="suspended">Suspended by university</option>
   </select>
   <div class="ms-auto d-flex gap-2">
     <span class="ga-pill pill-blue" id="count-pill">0 teachers</span>
@@ -50,6 +66,7 @@
 
 {% if can_manage %}
 <!-- invite / edit modal — head and HoD only -->
+
 <div class="modal fade" id="modal" tabindex="-1"><div class="modal-dialog modal-lg modal-dialog-centered">
   <div class="modal-content"><form id="form">{% csrf_token %}
     <div class="modal-header">
@@ -63,10 +80,30 @@
                  placeholder="teacher@college.edu" required>
           <div class="form-text d-none" id="email-locked">
             The email identifies the account and cannot be changed.</div></div>
-        <div class="col-md-4 mb-0"><label class="form-label">Full name</label>
-          <input class="form-control" name="full_name" placeholder="Optional — they can set it"></div>
+        <!--
+          Required now, where it used to be optional: the PAN check matches the
+          number against a name and a date of birth, so an invite with no name
+          has nothing to check against.
+        -->
+        <div class="col-md-4 mb-0"><label class="form-label">Full name *</label>
+          <input class="form-control" name="full_name" required
+                 placeholder="Exactly as printed on the PAN"></div>
         <div class="col-md-3 mb-0"><label class="form-label">Mobile</label>
           <input class="form-control" name="phone"></div>
+        <!--
+          PAN and date of birth. Locked once on file — they answer "who is this
+          person", and editing them could move one teacher's history onto
+          another. A row that predates this carries neither, and these stay
+          editable for exactly that case. See accounts/pan.py.
+        -->
+        <div class="col-md-4 mb-0"><label class="form-label">PAN *</label>
+          <input class="form-control text-uppercase" name="pan_number"
+                 maxlength="10" placeholder="ABCDE1234F" required>
+          <div class="form-text" id="pan-note">
+            Verified against the name and date of birth. Fixed once saved.</div></div>
+        <div class="col-md-4 mb-0"><label class="form-label">Date of birth *</label>
+          <input class="form-control" type="date" name="date_of_birth" required>
+          <div class="form-text" id="dob-note">Fixed once saved.</div></div>
         {% if user.is_head %}
         <div class="col-md-6 mb-0"><label class="form-label">Department *</label>
           <select class="form-select" name="department" id="dept-select" required>
@@ -85,14 +122,30 @@
 
       <hr>
       <h6 class="fw-bold mb-2"><i class="fa-solid fa-list-check me-2 text-muted-2"></i>Subject allocation</h6>
-      <p class="text-muted-2 fs-13">Pick a batch, then tick the subjects this teacher will take for it. Repeat for as many batches as you need.</p>
+      <p class="text-muted-2 fs-13">
+        Pick a batch and a section, then tick the subjects this teacher will
+        take for that group. Repeat for as many groups as you need.
+      </p>
 
       <div class="row g-2 align-items-end mb-3">
-        <div class="col-md-5">
+        <div class="col-md-4">
           <label class="form-label">Batch</label>
           <select class="form-select form-select-sm" id="pick-batch"><option value="">Select batch…</option></select>
         </div>
-        <div class="col-md-7">
+        <!--
+          "Whole batch" is a real choice, not the absence of one — see
+          academics/allocation.py. It is what every allocation meant before
+          sections existed, and what a college that does not divide its cohorts
+          still means, so it stays first in the list rather than being implied
+          by leaving the control alone.
+        -->
+        <div class="col-md-3">
+          <label class="form-label">Section</label>
+          <select class="form-select form-select-sm" id="pick-section">
+            <option value="">Whole batch</option>
+          </select>
+        </div>
+        <div class="col-md-5">
           <label class="form-label">Subjects</label>
           <div id="pick-subjects" class="border rounded-3 p-2 ga-scroll-y" style="min-height:52px">
             <small class="text-muted-2">Choose a batch first.</small>
@@ -113,6 +166,60 @@
   </form></div>
 </div></div>
 {% endif %}
+
+<!--
+  Outside the `can_manage` block above on purpose. That block is the invite and
+  edit modal, gated on HEAD-or-HOD; this one belongs to a university, which is
+  neither. It was nested inside it at first, so the only role that opens it was
+  the one role that never received it — and `new bootstrap.Modal(...)` threw on
+  an element that was not in the page.
+-->
+{% if is_university %}
+<!--
+  Suspension is a decision about a named person that arrives in their inbox and
+  their HoD's, so the reason is typed here rather than picked from a list: a
+  dropdown of canned reasons would be quoted verbatim into an email somebody
+  has to answer. See accounts/suspension.py.
+-->
+<div class="modal fade" id="suspend-modal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content"><form id="suspend-form">{% csrf_token %}
+      <input type="hidden" name="id" id="suspend-id">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="fa-solid fa-user-lock me-2 text-danger"></i>
+          Suspend <span id="suspend-name"></span></h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <p class="fs-13 text-muted-2 mb-3">
+          They will not be able to sign in until you lift this. Their classes,
+          subject allocations and attendance records are untouched and will be
+          waiting if you do — nothing is deleted.
+        </p>
+        <label class="form-label">Reason *</label>
+        <textarea class="form-control" name="reason" rows="4" required
+                  minlength="10"
+                  placeholder="What has happened, and what needs to change."></textarea>
+        <div class="form-text">
+          Quoted word for word to the teacher, the head of their department
+          and the head of the institute. Write it as something they can answer.
+        </div>
+        <div class="alert alert-warning fs-13 mt-3 mb-0">
+          <i class="fa-solid fa-envelope me-2"></i>
+          Emailing <b><span id="suspend-who">the teacher, their HoD and the
+          institute head</span></b> at their login addresses, the moment you
+          save.
+        </div>
+        <div class="invalid-feedback d-block" id="suspend-err"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+        <button type="submit" class="btn btn-danger">Suspend and notify</button>
+      </div>
+    </form></div>
+  </div>
+</div>
+{% endif %}
 {% endblock %}
 
 {% block scripts %}
@@ -127,18 +234,68 @@ $(function(){
     { key:"full_name", label:"Teacher", render:(v,r)=>
       '<div class="d-flex align-items-center gap-2">'+GA.avatar(v)+
       '<div><div class="fw-600">'+GA.esc(v)+'</div><small class="text-muted-2">'+GA.esc(r.email)+'</small></div></div>' },
+    GA.instituteCol(null, {always:true}),GA.disciplineCol(),
     { key:"department", label:"Department" },
     {% if show_mobile %}
     { key:"phone", label:"Mobile", render:(v,r)=>GA.phone(r.phone_dial) },
     {% endif %}
-    { key:"assignments", label:"Subjects · batches", sortable:false,
-      csv:v=>(v||[]).map(a=>a.subject.split(" — ")[0]+" · "+a.batch).join(", "),
+    { key:"assignments", label:"Subjects · batch · section", sortable:false,
+      csv:v=>(v||[]).map(a=>a.subject.split(" — ")[0]+" · "+a.batch+
+                            (a.section ? " · "+a.section : "")).join(", "),
       render:function(v){
         if(!v.length) return '<span class="text-muted-2">None</span>';
-        return v.map(a=>'<span class="ga-chip">'+GA.esc(a.subject.split(" — ")[0])+' · '+GA.esc(a.batch)+'</span>').join("");
+        /* Whole-batch and per-section allocations print differently, because
+           "2022-26" and "2022-26 · A" are different groups of students. */
+        return v.map(a=>'<span class="ga-chip'+(a.section_id?' ga-chip-section':'')+'">'+
+          GA.esc(a.subject.split(" — ")[0])+' · '+GA.esc(a.batch)+
+          (a.section ? ' · '+GA.esc(a.section) : '')+'</span>').join("");
       } },
     {% if not is_student %}
-    { key:"status", label:"Status", render:v=>GA.statusPill(v) },
+    /* Shared cell: Suspended leads, then Revoked, then status. See GA.statusCol. */
+    GA.statusCol(),
+    {% endif %}
+    {% if is_university %}
+    /*
+      The university's own column. Separate from the manage group below, which
+      is gated on `can_manage` (HEAD or HOD) — a university is neither, and
+      suspension is not an editing action anyway. `can_suspend` and `can_lift`
+      come from the server and mirror `suspension.may_suspend` exactly, so the
+      button offered is the one the endpoint will accept.
+    */
+    { key:"suspended", label:"Suspension", sortable:false, csv:function(v,r){
+        return v ? (r.suspension_reason || "suspended") : ""; },
+      render:function(v,r){
+        if(v){
+          /*
+            Clickable, and carrying the same data attributes the status pill
+            uses, so both open the one dialog in app.js rather than each
+            growing its own version of the same text.
+          */
+          return '<div class="d-flex flex-column gap-1 align-items-start">'+
+            '<button type="button" class="ga-pill pill-red ga-suspend-info" '+
+            'title="Click for the reason and date" '+
+            'data-reason="'+GA.esc(r.suspension_reason||"")+'" '+
+            'data-when="'+GA.esc(r.suspended_at||"")+'" '+
+            'data-by="'+GA.esc(r.suspended_by||"")+'" '+
+            'data-who="'+GA.esc(r.full_name||r.email||"")+'">'+
+            '<i class="fa-solid fa-user-lock me-1"></i>'+GA.esc(r.suspended_by||"Suspended")+
+            (r.suspended_at ? ' · '+GA.esc(r.suspended_at) : '')+'</button>'+
+            (r.can_lift
+              ? '<button class="btn btn-light btn-sm lift" data-id="'+r.id+'" '+
+                'data-name="'+GA.esc(r.full_name)+'">'+
+                '<i class="fa-solid fa-unlock me-1"></i>Lift</button>'
+              : '<span class="text-muted-2 fs-12">Only '+GA.esc(r.suspended_by||"the issuing university")+
+                ' can lift it</span>')+
+            '</div>';
+        }
+        if(!r.can_suspend){
+          return '<span class="text-muted-2 fs-12" title="'+
+            'Their department\'s discipline is not affiliated to you.">—</span>';
+        }
+        return '<button class="btn btn-light btn-sm text-danger suspend" data-id="'+r.id+'" '+
+          'data-name="'+GA.esc(r.full_name)+'" data-dept="'+GA.esc(r.department)+'">'+
+          '<i class="fa-solid fa-user-lock me-1"></i>Suspend</button>';
+      } },
     {% endif %}
     {% if can_manage %}
     { key:"id", label:"", sortable:false, className:"text-end", render:function(v,r){
@@ -146,6 +303,18 @@ $(function(){
         // A lock label replaces the buttons rather than showing disabled ones:
         // a disabled button still invites a click, and the tooltip explains who
         // to ask instead.
+        /*
+          Two different locks, and they need different words. "Not your
+          department" is answered by asking a colleague; "suspended" is
+          answered by asking the university, and pointing the reader at the
+          wrong office is worse than saying nothing.
+        */
+        if(r.frozen){
+          return '<span class="text-danger fs-12" title="Suspended by '+
+            GA.esc(r.suspended_by||"the affiliating university")+
+            ' — the record is frozen until they lift it.">'+
+            '<i class="fa-solid fa-user-lock me-1"></i>frozen</span>';
+        }
         if(!r.can_edit){
           return '<span class="text-muted-2 fs-12" title="'+GA.esc(r.department)+
             ' is not your department — only its HoD or the head can change this teacher.">'+
@@ -163,7 +332,11 @@ $(function(){
   function renderChips(){
     if(!selected.length){ $("#chips").html('<small class="text-muted-2">Nothing selected yet.</small>'); return; }
     $("#chips").html(selected.map(function(s,i){
-      return '<span class="ga-chip">'+GA.esc(s.subject_code)+' · '+GA.esc(s.batch_label)+
+      /* A section chip is visibly narrower than a whole-batch one, so the two
+         cannot be mistaken for each other in a list of twelve. */
+      return '<span class="ga-chip'+(s.section_id ? ' ga-chip-section' : '')+'">'+
+        GA.esc(s.subject_code)+' · '+GA.esc(s.batch_label)+
+        (s.section_id ? ' · '+GA.esc(s.section_label || "?") : '')+
         ' <i class="fa-solid fa-xmark x" data-i="'+i+'"></i></span>';
     }).join(""));
     $("#chips .x").on("click", function(){ selected.splice($(this).data("i"),1); renderChips(); refreshSubjectTicks(); });
@@ -179,16 +352,36 @@ $(function(){
     $("#pick-subjects").html('<small class="text-muted-2">Choose a batch first.</small>');
   }
 
+  /* The group a tick belongs to: batch *and* section. "" is the whole batch. */
+  function secId(){ return $("#pick-section").val() || ""; }
+  function sameGroup(s, sid, bid){
+    return s.subject_id == sid && s.batch_id == bid
+        && String(s.section_id || "") === secId();
+  }
+
+  function fillSectionPicker(){
+    const bid = $("#pick-batch").val();
+    const opts = (lookups.sections || []).filter(s => s.batch_id == bid);
+    $("#pick-section").html(
+      '<option value="">Whole batch</option>' +
+      opts.map(s=>'<option value="'+s.id+'" data-label="'+GA.esc(s.name)+'">'+
+                  GA.esc(s.name)+'</option>').join(""));
+  }
+
   function refreshSubjectTicks(){
     const bid = $("#pick-batch").val();
     $("#pick-subjects input[type=checkbox]").each(function(){
       const sid = $(this).val();
-      $(this).prop("checked", selected.some(s => s.subject_id == sid && s.batch_id == bid));
+      $(this).prop("checked", selected.some(s => sameGroup(s, sid, bid)));
     });
   }
 
+  /* Changing the section re-reads the ticks against the new group. */
+  $("#pick-section").on("change", refreshSubjectTicks);
+
   $("#pick-batch").on("change", function(){
     const bid = $(this).val(), d = deptId();
+    fillSectionPicker();
     if(!bid){ $("#pick-subjects").html('<small class="text-muted-2">Choose a batch first.</small>'); return; }
     const subs = lookups.subjects.filter(s=>!d || s.department_id == d);
     if(!subs.length){ $("#pick-subjects").html('<small class="text-danger">No subjects in this department yet.</small>'); return; }
@@ -200,15 +393,31 @@ $(function(){
     $(".sub-cb").on("change", function(){
       const sid = $(this).val(), code = $(this).data("code");
       const blabel = $("#pick-batch option:selected").data("label");
+      const secid = secId();
+      const slabel = $("#pick-section option:selected").data("label") || "";
       if(this.checked){
-        if(!selected.some(s=>s.subject_id==sid && s.batch_id==bid))
-          selected.push({subject_id:sid, batch_id:bid, subject_code:code, batch_label:blabel});
+        if(!selected.some(s=>sameGroup(s, sid, bid)))
+          selected.push({subject_id:sid, batch_id:bid, section_id:secid,
+                         subject_code:code, batch_label:blabel,
+                         section_label:slabel});
       } else {
-        selected = selected.filter(s=>!(s.subject_id==sid && s.batch_id==bid));
+        selected = selected.filter(s=>!sameGroup(s, sid, bid));
       }
       renderChips();
     });
   });
+
+  {% if is_university %}
+  const suspendModal = new bootstrap.Modal("#suspend-modal");
+  $("#suspend-form").on("submit", function(e){
+    e.preventDefault();
+    const id = $("#suspend-id").val();
+    GA.submit($(this), {
+      url:"/manage/api/teachers/"+id+"/suspension/",
+      onSuccess:function(){ suspendModal.hide(); load(); }
+    });
+  });
+  {% endif %}
 
   function bind(){
     $("#tbl").off("click", ".edit").on("click", ".edit", function(){
@@ -225,14 +434,63 @@ $(function(){
       $("#email-locked").removeClass("d-none");
       $('#form [name=full_name]').val(r.full_name === "(awaiting registration)" ? "" : r.full_name);
       $('#form [name=phone]').val(r.phone || "");
+      /*
+        Locked when the teacher already has them, open when they do not — the
+        row predates this feature and filling them in is the only way it ever
+        gets one. The server enforces the same rule; this only saves the person
+        typing into a box that would be refused.
+      */
+      /*
+        `disabled`, not `readonly`. A readonly input still *submits*, and what
+        it holds here is the masked PAN — the whole number is never sent to the
+        browser. So editing a phone number posted "ABCDE****F" back and the
+        server read that as somebody trying to change the PAN, refusing a save
+        that touched nothing else. A disabled field is left out of the form
+        entirely, which is the truth: there is nothing to send.
+
+        The server no longer trusts this either — see `pan.is_echo_of` — but
+        the field should not be lying to the form in the first place.
+      */
+      $('#form [name=pan_number]').val(r.has_pan ? r.pan : "")
+        .prop("disabled", !!r.has_pan).prop("readonly", false)
+        .prop("required", false);
+      $('#form [name=date_of_birth]').val(r.date_of_birth_value || "")
+        .prop("disabled", !!r.date_of_birth_value).prop("readonly", false)
+        .prop("required", false);
+      $("#pan-note").text(r.has_pan
+        ? "Fixed — masked here. Archive and re-add to correct it."
+        : "Not on file yet. Adding one verifies it against the name and date of birth.");
+      $("#dob-note").text(r.date_of_birth_value ? "Fixed once saved."
+                                                : "Not on file yet.");
       if($("#dept-select").length){
         $("#dept-select").val(r.department_id);
         $("#dept-move-note").removeClass("d-none");
       }
       selected = r.assignments.map(a=>({subject_id:a.subject_id, batch_id:a.batch_id,
+        section_id:a.section_id || "", section_label:a.section || "",
         subject_code:a.subject.split(" — ")[0], batch_label:a.batch}));
-      fillBatches(); renderChips(); modal.show();
+      fillBatches(); fillSectionPicker(); renderChips(); modal.show();
     });
+    {% if is_university %}
+    $("#tbl").off("click", ".suspend").on("click", ".suspend", function(){
+      $("#suspend-id").val($(this).attr("data-id"));
+      $("#suspend-name").text($(this).attr("data-name"));
+      $("#suspend-err").text("");
+      $('#suspend-form [name=reason]').val("");
+      suspendModal.show();
+    });
+    $("#tbl").off("click", ".lift").on("click", ".lift", function(){
+      const id = $(this).attr("data-id"), name = $(this).attr("data-name");
+      GA.confirm({ title:"Lift the suspension on "+name+"?",
+        variant:"success", icon:"fa-unlock",
+        body:"They will be able to sign in again straight away. The teacher, "+
+             "their head of department and the institute head are emailed.",
+        confirmText:"Lift suspension" })
+        .done(function(){
+          GA.post("/manage/api/teachers/"+id+"/suspension/lift/").done(load);
+        });
+    });
+    {% endif %}
     $("#tbl").off("click", ".resend").on("click", ".resend", function(){
       GA.post("/manage/api/invitations/"+$(this).data("inv")+"/resend/");
     });
@@ -270,9 +528,12 @@ $(function(){
 
   function applyFilters(){
     const d = $("#f-dept").val(), sid = $("#f-subject").val(), st = $("#f-status").val(),
-          kind = $("#f-subject-type").val(), deg = $("#f-degree").val();
+          kind = $("#f-subject-type").val(), deg = $("#f-degree").val(),
+          disc = $("#f-discipline-filter").val(),
+          sem = $("#f-semester").val();
     const view = rows.filter(function(r){
       if(d && r.department_id != d) return false;
+      if(disc && r.discipline !== disc) return false;
       // Subject match is against the teacher's live allocations, so a teacher
       // only appears if they actually teach that subject somewhere.
       if(sid && !(r.assignments||[]).some(a=>a.subject_id == sid)) return false;
@@ -280,11 +541,17 @@ $(function(){
       // this type.
       if(kind && !(r.assignments||[]).some(a=>a.subject_type === kind)) return false;
       if(deg && !(r.assignments||[]).some(a=>a.degree === deg)) return false;
-      if(st === "deactivated") return !r.is_active;
+      if(sem && !(r.assignments||[]).some(a=>String(a.semester) === sem)) return false;
+      // Revoked reads the flag; every other option reads the status. The two
+      // are independent facts — see core/enums.py — so a revoked teacher still
+      // appears under Activated, which is what they are.
+      if(st === "revoked")     return !!r.revoked;
+      // Its own flag, read like `revoked` and for the same reason: a suspended
+      // teacher is still Activated in the institute's records, so filtering on
+      // status would never find them. See core/enums.py.
+      if(st === "suspended")   return !!r.suspended;
       if(st === "unassigned")  return !(r.assignments||[]).length;
-      // Activated/Invited describe registration, which is independent of being
-      // deactivated — exclude deactivated accounts so the two read as distinct.
-      if(st) return r.status === st && r.is_active;
+      if(st) return r.status === st;
       return true;
     });
     if(!table) table = GA.table("#tbl",{ csvName:"teachers",columns:cols, rows:view, search:"#search",
@@ -310,7 +577,17 @@ $(function(){
     // Undo whatever the edit path locked, or the invite form stays read-only.
     $("#f-email").prop("readonly", false).prop("required", true);
     $("#email-locked, #dept-move-note").addClass("d-none");
-    fillBatches(); renderChips(); modal.show();
+    // `disabled` has to be undone as well as `readonly`, or the invite form
+    // inherits whatever the last edited teacher locked — and a disabled field
+    // is not submitted, so the invite would arrive with no PAN at all.
+    fillBatches(); renderChips();
+    $('#form [name=pan_number]').val("")
+      .prop("disabled", false).prop("readonly", false).prop("required", true);
+    $('#form [name=date_of_birth]').val("")
+      .prop("disabled", false).prop("readonly", false).prop("required", true);
+    $("#pan-note").text("Verified against the name and date of birth. Fixed once saved.");
+    $("#dob-note").text("Fixed once saved.");
+    modal.show();
   });
   $("#btn-refresh").on("click", function(){ GA.spin(this, load()); });
   $(document).on("change", "#dept-select", fillBatches);
@@ -318,9 +595,9 @@ $(function(){
   // Filtering is client-side: the rows are already loaded, so re-filtering is
   // instant and does not cost a round trip.
   $("#f-dept, #f-subject-type, #f-degree").on("change", function(){ fillSubjectOptions(); applyFilters(); });
-  $("#f-subject, #f-status").on("change", applyFilters);
+  $("#f-subject, #f-status, #f-discipline-filter, #f-semester").on("change", applyFilters);
   $("#btn-reset-filters").on("click", function(){
-    $("#f-dept, #f-subject, #f-subject-type, #f-degree, #f-status").val("");
+    $("#f-dept, #f-subject, #f-subject-type, #f-degree, #f-status, #f-semester, #f-discipline-filter").val("");
     $("#search").val("").trigger("input");
     fillSubjectOptions(); applyFilters();
   });
@@ -330,7 +607,10 @@ $(function(){
     $("#assign-error").text("");
     if(!selected.length){ $("#assign-error").text("Select at least one subject and batch."); return; }
     const fd = new FormData(this);
-    fd.append("assignments", JSON.stringify(selected.map(s=>({subject_id:s.subject_id, batch_id:s.batch_id}))));
+    fd.append("assignments", JSON.stringify(selected.map(s=>({
+      subject_id:s.subject_id, batch_id:s.batch_id,
+      /* "" is the whole batch — see academics/allocation.py. */
+      section_id:s.section_id || ""}))));
     const url = editingId ? "/manage/api/teachers/"+editingId+"/assignments/" : "{% url 'academics:api_teacher_invite' %}";
     const $btn = $(this).find("[type=submit]"); GA.btnBusy($btn, true, "Saving…");
     GA.post(url, fd, {quiet:true})

@@ -1,0 +1,268 @@
+{% extends "layouts/app.html" %}
+{% block page_title %}Subjects{% endblock %}
+{% block page_sub %}The syllabus you publish, per department and semester. Institutes running the department get it read-only.{% endblock %}
+{% block topbar_actions %}
+{% if can_publish %}
+<button class="btn btn-primary btn-sm" id="btn-new">
+  <i class="fa-solid fa-plus me-1"></i>Publish a subject</button>
+{% endif %}
+{% endblock %}
+
+{% block content %}
+<div class="alert alert-light border fs-13 d-flex gap-2">
+  <i class="fa-solid fa-circle-info text-primary mt-1"></i>
+  <div>
+    A subject you publish appears at every institute running that department,
+    and stays yours to change — a syllabus correction reaches them without
+    anybody re-entering it. <b>Archiving reaches them too</b>: a paper withdrawn
+    centrally but still taught at nine colleges is not a withdrawn paper.
+    Nothing is deleted either way.
+  </div>
+</div>
+
+{% if not can_publish %}
+<div class="alert alert-warning fs-13">
+  <i class="fa-solid fa-triangle-exclamation me-2"></i>
+  A subject has to belong to a department, and you have not published one yet.
+  <a href="{% url 'academics:catalogue_departments' %}">Publish a department</a> first.
+</div>
+{% endif %}
+
+<div class="card mb-3"><div class="card-body py-3 table-toolbar">
+  <div class="input-group input-group-sm" style="max-width:280px">
+    <span class="input-group-text"><i class="fa-solid fa-magnifying-glass"></i></span>
+    <input class="form-control" id="search" placeholder="Search code or name…">
+  </div>
+  <select class="form-select form-select-sm" id="f-department" style="max-width:250px">
+    <option value="">All departments</option>
+    {% for d in departments %}
+    <option value="{{ d.id }}">{{ d.code }} — {{ d.name }}</option>{% endfor %}
+  </select>
+  {% include "partials/discipline_filter.html" with id="f-discipline-filter" %}
+  <select class="form-select form-select-sm" id="f-semester" style="max-width:160px">
+    <option value="">All semesters</option>
+    {% for i in semesters %}<option value="{{ i }}">Semester {{ i }}</option>{% endfor %}
+  </select>
+  {% include "partials/subject_type_filter.html" with id="f-type" %}
+  <select class="form-select form-select-sm" id="f-status" style="max-width:180px">
+    <option value="">Published &amp; archived</option>
+    <option value="ACTIVE">Published</option>
+    <option value="ARCHIVED">Archived</option>
+  </select>
+  <button class="btn btn-light btn-sm ms-auto" id="btn-refresh">
+    <i class="fa-solid fa-rotate"></i></button>
+</div></div>
+
+<div class="card"><div class="card-body"><div id="tbl"></div></div></div>
+
+<div class="modal fade" id="modal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content"><form id="form">{% csrf_token %}
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="fa-solid fa-book me-2 text-primary"></i>
+          <span id="mtitle">Publish a subject</span></h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="rec-id">
+        <div class="row g-3 mb-3">
+          <div class="col-md-8">
+            <label class="form-label">Department *</label>
+            <select class="form-select" name="department" required>
+              <option value="">Choose…</option>
+              {% for d in departments %}
+              <option value="{{ d.id }}">{{ d.code }} — {{ d.name }}</option>{% endfor %}
+            </select>
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">Semester *</label>
+            <select class="form-select" name="semester" required>
+              {% for i in semesters %}<option value="{{ i }}">{{ i }}</option>{% endfor %}
+            </select>
+          </div>
+        </div>
+        <div class="row g-3 mb-3">
+          <div class="col-md-4">
+            <label class="form-label">Code *</label>
+            <input class="form-control text-uppercase" name="code" placeholder="DSA" required>
+            <!--
+              Fixed once a college teaches it, for the same reason a batch
+              label is: the copies were matched on it, so a rename would leave
+              each college with two subjects where it had one — the second
+              empty, while the attendance sat in the first.
+            -->
+            <div class="form-text" id="code-note">
+              Institutes' copies are matched on it.
+            </div>
+          </div>
+          <div class="col-md-8">
+            <label class="form-label">Subject name *</label>
+            <input class="form-control" name="name" placeholder="Data Structures &amp; Algorithms" required>
+          </div>
+        </div>
+        <div class="row g-3 mb-3">
+          <div class="col-md-4">
+            <label class="form-label">Degree *</label>
+            <select class="form-select" name="degree" required>
+              {% for value, label in degrees %}
+              <option value="{{ value }}">{{ label }}</option>{% endfor %}
+            </select>
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">Type *</label>
+            <select class="form-select" name="subject_type" required>
+              {% for value, label in subject_types %}
+              <option value="{{ value }}">{{ label }}</option>{% endfor %}
+            </select>
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">Credits *</label>
+            <input class="form-control" type="number" name="credits" min="0" max="20" value="4" required>
+          </div>
+        </div>
+        <div class="mb-0 form-check ps-4">
+          <input class="form-check-input" type="checkbox" name="status"
+                 id="published" value="ACTIVE" checked>
+          <label class="form-check-label" for="published">Published</label>
+        </div>
+        <div class="invalid-feedback d-block" id="err"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+        <button type="submit" class="btn btn-primary">Save</button>
+      </div>
+    </form></div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+$(function(){
+  let table = null, rows = [];
+  const modal = new bootstrap.Modal("#modal");
+
+  const cols = [
+    { key:"code", label:"Code", render:v=>'<span class="fw-600">'+GA.esc(v)+'</span>' },
+    { key:"name", label:"Subject" },
+    { key:"department", label:"Department", render:(v,r)=>
+      '<div>'+GA.esc(v)+'</div><small class="text-muted-2">'+GA.esc(r.department_code)+'</small>' },
+    GA.disciplineCol(),
+    { key:"semester", label:"Sem", className:"text-center" },
+    { key:"subject_type_label", label:"Type", className:"text-center" },
+    { key:"credits", label:"Credits", className:"text-center" },
+    { key:"adoptions", label:"Institutes teaching it", className:"text-center",
+      render:v=> v ? '<span class="ga-pill pill-blue">'+v+'</span>'
+                   : '<span class="text-muted-2">none yet</span>' },
+    GA.statusCol(),
+    { key:"id", label:"", sortable:false, className:"text-end", render:(v,r)=>
+      '<div class="btn-group btn-group-sm">'+
+      '<button class="btn btn-light edit" data-id="'+v+'" title="Edit">'+
+      '<i class="fa-solid fa-pen"></i></button>'+
+      '<button class="btn btn-light toggle '+(r.status==="ARCHIVED"?"text-success":"text-warning")+
+      '" data-id="'+v+'" data-n="'+r.adoptions+'" data-code="'+GA.esc(r.code)+
+      '" title="'+(r.status==="ARCHIVED"?"Restore everywhere":"Archive everywhere")+'">'+
+      '<i class="fa-solid fa-'+(r.status==="ARCHIVED"?"rotate-left":"box-archive")+'"></i></button>'+
+      (r.adoptions ? ''
+        : '<button class="btn btn-light text-danger del" data-id="'+v+'" '+
+          'data-code="'+GA.esc(r.code)+'" title="Remove"><i class="fa-solid fa-trash"></i></button>')+
+      '</div>' }
+  ];
+
+  function applyFilters(){
+    const d = $("#f-department").val(), disc = $("#f-discipline-filter").val(),
+          sem = $("#f-semester").val(), t = $("#f-type").val(),
+          s = $("#f-status").val();
+    table.setRows(rows.filter(function(r){
+      if (d && r.department_id !== d) return false;
+      if (disc && r.discipline !== disc) return false;
+      if (sem && String(r.semester) !== sem) return false;
+      if (t && r.subject_type !== t) return false;
+      if (s && r.status !== s) return false;
+      return true;
+    }));
+    bind();
+  }
+  $("#f-department, #f-discipline-filter, #f-semester, #f-type, #f-status")
+    .on("change", applyFilters);
+
+  function load(){
+    GA.loading("#tbl", {rows:6, cols:6});
+    return GA.get("{% url 'academics:api_catalogue_subjects' %}").done(function(res){
+      rows = res.data.rows;
+      if (!table) table = GA.table("#tbl", { csvName:"catalogue-subjects",
+        columns:cols, rows:rows, search:"#search",
+        empty:"No subjects published yet." });
+      else table.setRows(rows);
+      applyFilters();
+    });
+  }
+
+  function bind(){
+    $("#tbl").off("click", ".edit").on("click", ".edit", function(){
+      const r = rows.find(x => x.id == $(this).attr("data-id"));
+      $("#mtitle").text("Edit subject"); $("#rec-id").val(r.id); $("#err").text("");
+      $('#form [name=department]').val(r.department_id);
+      $('#form [name=semester]').val(r.semester);
+      $('#form [name=name]').val(r.name);
+      $('#form [name=degree]').val(r.degree);
+      $('#form [name=subject_type]').val(r.subject_type);
+      $('#form [name=credits]').val(r.credits);
+      $('#form [name=code]').val(r.code).prop("readonly", !!r.adoptions);
+      $("#code-note").text(r.adoptions
+        ? r.adoptions + " institute(s) teach this, so the code is fixed."
+        : "Institutes' copies are matched on it.");
+      $("#published").prop("checked", r.status !== "ARCHIVED");
+      modal.show();
+    });
+    $("#tbl").off("click", ".toggle").on("click", ".toggle", function(){
+      const id = $(this).attr("data-id"), n = +$(this).data("n"),
+            code = $(this).data("code");
+      /*
+        Confirmed when colleges teach it, because this does reach them.
+        Nothing is deleted, and the wording says so — the fear this dialog
+        exists to answer is "have I just lost a term of attendance".
+      */
+      const go = () => GA.post("/manage/api/catalogue/subjects/"+id+"/toggle/").done(load);
+      if (!n) return go();
+      GA.confirm({ title:"Change "+code+" at "+n+" institute(s)?",
+        variant:"warning", icon:"fa-book",
+        body:"This applies at every institute teaching it. Nothing is deleted — enrolments, sessions and attendance are kept, and reversing this brings them straight back.",
+        confirmText:"Apply everywhere" }).done(go);
+    });
+    $("#tbl").off("click", ".del").on("click", ".del", function(){
+      const id = $(this).attr("data-id");
+      GA.confirm({title:"Remove "+$(this).data("code")+"?",
+        body:"Nobody teaches it, so nothing is affected."})
+        .done(()=> GA.post("/manage/api/catalogue/subjects/"+id+"/delete/").done(load));
+    });
+  }
+
+  $("#btn-new").on("click", function(){
+    $("#form")[0].reset(); $("#rec-id").val(""); $("#mtitle").text("Publish a subject");
+    $('#form [name=code]').prop("readonly", false);
+    $("#code-note").text("Institutes' copies are matched on it.");
+    $("#published").prop("checked", true);
+    $("#err").text(""); GA.clearErrors($("#form")); modal.show();
+  });
+  $("#btn-refresh").on("click", function(){ GA.spin(this, load()); });
+
+  $("#form").on("submit", function(e){
+    e.preventDefault();
+    const id = $("#rec-id").val();
+    const data = $(this).serializeArray();
+    if (!$("#published").is(":checked")) data.push({name:"status", value:"ARCHIVED"});
+    GA.post(id ? "/manage/api/catalogue/subjects/"+id+"/save/"
+               : "{% url 'academics:api_catalogue_subject_create' %}", $.param(data))
+      .done(function(){ modal.hide(); load(); })
+      .fail(function(xhr){
+        const b = xhr.responseJSON || {};
+        $("#err").text(b.message || "That did not work.");
+        GA.showErrors($("#form"), b.errors || {});
+      });
+  });
+
+  load();
+});
+</script>
+{% endblock %}

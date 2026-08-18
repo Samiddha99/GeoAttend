@@ -12,6 +12,29 @@
       <span class="input-group-text"><i class="fa-solid fa-magnifying-glass"></i></span>
       <input class="form-control" id="search" placeholder="Search departments…">
     </div>
+    {% include "partials/institute_filter.html" with id="f-institute" %}
+    <select class="form-select form-select-sm" id="f-discipline-filter" style="max-width:230px">
+      <option value="">All disciplines</option>
+      {% for d in filter_disciplines %}
+      <option value="{{ d.value }}">{{ d.label }}</option>{% endfor %}
+    </select>
+    <select class="form-select form-select-sm" id="f-owner" style="max-width:180px">
+      <option value="">Autonomous &amp; affiliated</option>
+      <option value="own">Ours to define</option>
+      <option value="governed">Set by a university</option>
+    </select>
+    <select class="form-select form-select-sm" id="f-hod" style="max-width:170px">
+      <option value="">Any HoD state</option>
+      <option value="yes">HoD assigned</option>
+      <option value="pending">Invitation pending</option>
+      <option value="no">No HoD</option>
+    </select>
+    <select class="form-select form-select-sm" id="f-active" style="max-width:150px">
+      <option value="">Active &amp; archived</option>
+      <option value="1">Active</option>
+      <option value="0">Archived</option>
+      <option value="revoked">Revoked discipline</option>
+    </select>
     <div class="ms-auto d-flex gap-2">
       <button class="btn btn-light btn-sm" id="btn-refresh"><i class="fa-solid fa-rotate"></i></button>
       <button class="btn btn-light btn-sm" data-bs-toggle="modal" data-bs-target="#inv-modal">
@@ -33,13 +56,75 @@
       </div>
       <div class="modal-body">
         <input type="hidden" id="dept-id">
-        <div class="mb-3">
-          <label class="form-label">Department name *</label>
-          <input class="form-control" name="name" placeholder="Computer Science &amp; Engineering" required>
+        <!--
+          Shown when the department sits in an affiliated discipline: the name,
+          code and discipline belong to the university, the HoD does not. See
+          academics/views.api_department_save for why those two rights are
+          split.
+        -->
+        <div class="alert alert-light border fs-13 d-none" id="governed-note">
+          <i class="fa-solid fa-lock text-primary me-2"></i>
+          This department is defined by <span class="fw-600"></span>. You can
+          still change who heads it — that stays yours.
         </div>
-        <div class="mb-3">
-          <label class="form-label">Department code *</label>
-          <input class="form-control text-uppercase" name="code" placeholder="CSE" required>
+        <!--
+          Discipline first, and what it is decides the rest of the modal.
+
+          Affiliated: the institute picks one of the departments its university
+          publishes. It cannot type a name — the name and code belong to the
+          university, and a college inventing its own would make its copy
+          disagree with every other college running the same syllabus.
+
+          Autonomous: nobody publishes one, so the institute writes it.
+
+          The two panels are driven by whether the chosen discipline has a
+          catalogue, not by a separate mode flag, so they cannot both show.
+        -->
+        <div class="mb-3" id="discipline-wrap">
+          <label class="form-label">Discipline *</label>
+          <select class="form-select" name="discipline" id="f-discipline" required>
+            <option value="">Choose…</option>
+          </select>
+          <div class="form-text" id="discipline-note">
+            Every discipline your institute teaches. Add more under
+            <a href="{% url 'accounts:profile' %}">Profile &amp; security</a>.
+          </div>
+        </div>
+
+        <div class="mb-3 d-none" id="catalogue-wrap">
+          <label class="form-label">Department *</label>
+          <select class="form-select" name="catalogue_entry" id="f-catalogue">
+            <option value="">Choose…</option>
+          </select>
+          <div class="form-text" id="catalogue-note"></div>
+        </div>
+
+        <div class="d-none" id="own-wrap">
+          <div class="mb-3">
+            <label class="form-label">Department name *</label>
+            <input class="form-control" name="name"
+                   placeholder="Computer Science &amp; Engineering">
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Department code *</label>
+            <input class="form-control text-uppercase" name="code" placeholder="CSE">
+          </div>
+        </div>
+
+        <!--
+          Item 1: the department's own state, for a department nobody else
+          governs. Hidden for a revoked one — its state on restore comes from
+          the snapshot taken when its discipline was removed, so a checkbox
+          here would be offering a choice the save is going to ignore.
+        -->
+        <div class="mb-3 form-check ps-4" id="dept-active-wrap">
+          <input class="form-check-input" type="checkbox" name="is_active"
+                 id="dept-active" checked>
+          <label class="form-check-label" for="dept-active">Active</label>
+          <div class="form-text">
+            Archiving hides the department and everything in it. Nothing is
+            deleted.
+          </div>
         </div>
         <div class="mb-0">
           <label class="form-label">Head of Department email</label>
@@ -77,42 +162,165 @@ $(function(){
   const modal = new bootstrap.Modal("#dept-modal");
 
   const columns = [
+    /* `always`: the Institute code belongs here for every kind of user. */
+    GA.instituteCol(null, {always:true}),
+    GA.disciplineCol(),
     { key:"name", label:"Department", render:(v,r)=>
         '<div class="d-flex align-items-center gap-2">'+GA.avatar(v)+
         '<div><div class="fw-600">'+GA.esc(v)+'</div><small class="text-muted-2">'+GA.esc(r.code)+'</small></div></div>' },
     { key:"hod_name", label:"Head of Department", render:(v,r)=>
         r.hod_email ? '<div><div class="fw-600">'+GA.esc(v||"—")+'</div><small class="text-muted-2">'+GA.esc(r.hod_email)+'</small></div>'
                     : '<span class="text-muted-2">Not assigned</span>' },
-    { key:"hod_status", label:"Status", render:v=>GA.statusPill(v) },
+    { key:"hod_status", label:"HoD status", render:v=>GA.statusPill(v) },
+    /*
+      The department's own state, which `hod_status` never was. Revoked means
+      its discipline is no longer on the institute's record — see
+      academics/curriculum.revoked_department_ids.
+    */
+    /* One shared cell: Revoked leads, status follows. See GA.statusCol. */
+    GA.statusCol(),
+    /*
+      Who defines this department. Blank for the institute's own — a column
+      reading "mine" down every row of an autonomous institute is noise.
+    */
+    { key:"governed_by", label:"Set by", render:v=> v
+        ? '<span class="ga-pill pill-violet" title="Name, code and discipline are theirs to change">'+
+          '<i class="fa-solid fa-lock me-1"></i>'+GA.esc(v)+'</span>'
+        : '<span class="text-muted-2">This institute</span>' },
     { key:"subject_count", label:"Subjects", className:"text-center" },
     { key:"batch_count", label:"Batches", className:"text-center" },
     { key:"teacher_count", label:"Teachers", className:"text-center" },
     { key:"student_count", label:"Students", className:"text-center" },
+    /*
+      Edit is always offered — a governed department still has a HoD the
+      institute may change, which is the whole point of keeping the two rights
+      apart. Only Remove disappears, because there is no part of it the
+      institute is entitled to.
+    */
     { key:"id", label:"", sortable:false, className:"text-end", render:(v,r)=>
         '<div class="btn-group btn-group-sm">'+
-        '<button class="btn btn-light edit" data-id="'+v+'" title="Edit"><i class="fa-solid fa-pen"></i></button>'+
-        '<button class="btn btn-light text-danger del" data-id="'+v+'" data-name="'+GA.esc(r.name)+'" title="Remove"><i class="fa-solid fa-trash"></i></button>'+
+        '<button class="btn btn-light edit" data-id="'+v+'" title="'+
+        (r.can_define ? "Edit" : "Change the HoD")+'"><i class="fa-solid fa-pen"></i></button>'+
+        (r.can_define
+          ? '<button class="btn btn-light text-danger del" data-id="'+v+'" data-name="'+GA.esc(r.name)+'" title="Remove"><i class="fa-solid fa-trash"></i></button>'
+          : '')+
         '</div>' }
   ];
+
+  let rows = [];
+
+  function applyFilters(){
+    const d = $("#f-discipline-filter").val(), o = $("#f-owner").val(),
+          h = $("#f-hod").val(), a = $("#f-active").val();
+    table.setRows(rows.filter(function(r){
+      if (d && r.discipline !== d) return false;
+      if (o === "own" && !r.can_define) return false;
+      if (o === "governed" && r.can_define) return false;
+      if (h === "yes" && !(r.hod_email && r.hod_status === "ACCEPTED")) return false;
+      if (h === "pending" && !(r.hod_email && r.hod_status !== "ACCEPTED")) return false;
+      if (h === "no" && r.hod_email) return false;
+      if (a === "revoked" && !r.revoked) return false;
+      if (a === "1" && !(r.is_active && !r.revoked)) return false;
+      if (a === "0" && (r.is_active || r.revoked)) return false;
+      return true;
+    }));
+    bind();
+  }
+
+  $("#f-discipline-filter, #f-owner, #f-hod, #f-active").on("change", applyFilters);
 
   function load(){
     GA.loading("#dept-table", {rows:6, cols:4});
     return GA.get("{% url 'academics:api_departments' %}").done(function(res){
-      if (!table) table = GA.table("#dept-table", { csvName:"departments", columns: columns, rows: res.data.rows, search:"#search",
+      rows = res.data.rows;
+      if (!table) table = GA.table("#dept-table", { csvName:"departments", columns: columns, rows: rows, search:"#search",
         empty:"No departments yet — create your first one." });
-      else table.setRows(res.data.rows);
-      bind();
+      else table.setRows(rows);
+      applyFilters();
     });
   }
 
+  /*
+    What each discipline offers. Fetched once when the page loads rather than
+    on every change of the picker — an institute holds a handful, and a
+    dropdown that waits on the network is one people click twice.
+  */
+  let options = [];
+
+  function loadOptions(){
+    return GA.get("{% url 'academics:api_department_options' %}", {}, {quiet:true})
+      .done(function(res){
+        options = res.data.disciplines;
+        $("#f-discipline").html('<option value="">Choose…</option>' +
+          options.map(o => '<option value="'+o.value+'">'+GA.esc(o.label)+
+            (o.autonomous ? " — autonomous" : " — " + GA.esc(o.university))+
+            '</option>').join(""));
+      });
+  }
+
+  function showModeFor(code){
+    const chosen = options.find(o => o.value === code);
+    /*
+      The catalogue being empty *is* the instruction: an autonomous discipline
+      has nobody publishing for it, which is exactly the case where the
+      institute writes the name itself. One source of truth, so the two panels
+      can never both show.
+    */
+    const adopting = !!(chosen && !chosen.autonomous);
+    $("#catalogue-wrap").toggleClass("d-none", !adopting);
+    $("#own-wrap").toggleClass("d-none", adopting || !chosen);
+    $('#dept-form [name=name], #dept-form [name=code]').prop("required", !!chosen && !adopting);
+    $("#f-catalogue").prop("required", adopting);
+
+    if (!adopting) {
+      $("#catalogue-note").text("");
+      return;
+    }
+    const left = (chosen.catalogue || []).filter(e => !e.adopted);
+    $("#f-catalogue").html(left.length
+      ? '<option value="">Choose…</option>' + left.map(e =>
+          '<option value="'+e.id+'">'+GA.esc(e.code)+' — '+GA.esc(e.name)+
+          ' ('+e.subjects+' subjects, '+e.batches+' batches)</option>').join("")
+      : '<option value="">Nothing left to add</option>');
+    $("#catalogue-note").html(left.length
+      ? "Published by " + GA.esc(chosen.university) +
+        ". Its subjects and batches come with it, and stay theirs to change."
+      : "You already run every department " + GA.esc(chosen.university) +
+        " publishes for this discipline.");
+  }
+
+  $("#f-discipline").on("change", function(){ showModeFor($(this).val()); });
+
   function bind(){
     $("#dept-table").off("click", ".edit").on("click", ".edit", function(){
-      const row = table.getRows().find(r => r.id == $(this).attr("data-id"));
-      $("#modal-title").text("Edit department");
+      const row = rows.find(r => r.id == $(this).attr("data-id"));
+      $("#modal-title").text(row.can_define ? "Edit department"
+                                            : "Change the head of department");
       $("#dept-id").val(row.id);
+      /*
+        Editing never re-opens the choice of where the department came from —
+        that is a create-time question. The name and code show as they are; an
+        adopted department's are disabled because they are the university's.
+      */
+      $("#discipline-wrap, #catalogue-wrap").addClass("d-none");
+      $("#own-wrap").removeClass("d-none");
       $('#dept-form [name=name]').val(row.name);
       $('#dept-form [name=code]').val(row.code);
+      $('#dept-form [name=discipline]').val(row.discipline || "");
+      $("#dept-active").prop("checked", row.is_active);
+      // A revoked department's state is restored from the snapshot, not chosen
+      // here — so the control is hidden rather than shown and ignored.
+      $("#dept-active-wrap").toggleClass("d-none", !!row.revoked);
       $('#dept-form [name=hod_email]').val(row.hod_email);
+      /*
+        A governed department: only the HoD may move. Disabled rather than
+        hidden so the person can still read what the department is while
+        changing who leads it. The server ignores these fields regardless.
+      */
+      $('#dept-form [name=name], #dept-form [name=code]')
+        .prop("disabled", !row.can_define).prop("required", row.can_define);
+      $("#governed-note").toggleClass("d-none", !!row.can_define)
+        .find("span").text(row.governed_by || "your affiliating university");
       modal.show();
     });
     $("#dept-table").off("click", ".del").on("click", ".del", function(){
@@ -126,9 +334,19 @@ $(function(){
 
   $("#btn-new").on("click", function(){
     $("#dept-form")[0].reset(); $("#dept-id").val(""); $("#modal-title").text("New department");
+    $('#dept-form [name=name], #dept-form [name=code]').prop("disabled", false);
+    $("#discipline-wrap").removeClass("d-none");
+    // Neither panel until a discipline is chosen — the choice is what decides
+    // which of them applies.
+    $("#catalogue-wrap, #own-wrap").addClass("d-none");
+    $("#f-discipline").val("");
+    $("#governed-note").addClass("d-none");
+    $("#dept-active").prop("checked", true);
+    $("#dept-active-wrap").removeClass("d-none");
     GA.clearErrors($("#dept-form")); modal.show();
   });
   $("#btn-refresh").on("click", function(){ GA.spin(this, load()); });
+  loadOptions();
 
   $("#dept-form").on("submit", function(e){
     e.preventDefault();
@@ -142,6 +360,7 @@ $(function(){
   $("#inv-modal").on("shown.bs.modal", function(){
     GA.get("{% url 'academics:api_invitations' %}").done(function(res){
       const cols = [
+        GA.instituteCol(),
         { key:"email", label:"Email", render:v=>'<span class="fw-600">'+GA.esc(v)+'</span>' },
         { key:"role", label:"Role", render:v=>'<span class="ga-pill pill-violet">'+v+'</span>' },
         { key:"department", label:"Department" },

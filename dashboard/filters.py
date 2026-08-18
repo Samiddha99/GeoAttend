@@ -11,11 +11,17 @@ class ReportFilters:
     # integers. `semester` is the only genuine number here.
     start: dt.date
     end: dt.date
+    # Only a university ever sets this — everyone else already has exactly one
+    # institute, so it is a no-op for them.
+    institute: str | None = None
     department: str | None = None
     batch: str | None = None
     subject: str | None = None
     subject_type: str | None = None
     degree: str | None = None
+    # The department's discipline, so a report can be narrowed to one wing of
+    # a college without naming each of its departments.
+    discipline: str | None = None
     teacher: str | None = None
     student: str | None = None
     semester: int | None = None
@@ -64,21 +70,26 @@ class ReportFilters:
             return raw if raw in allowed else None
 
         from academics.models import Degree, SubjectType
+        from accounts.models import Discipline
 
         return cls(
             start=start, end=end,
+            institute=oid("institute"),
             department=oid("department"), batch=oid("batch"), subject=oid("subject"),
             subject_type=choice("subject_type", set(SubjectType.values)),
             degree=choice("degree", set(Degree.values)),
+            discipline=choice("discipline", set(Discipline.values)),
             teacher=oid("teacher"), student=oid("student"), semester=num("semester"),
         )
 
     def as_dict(self):
         return {
             "start": self.start.isoformat(), "end": self.end.isoformat(),
+            "institute": self.institute,
             "department": self.department, "batch": self.batch, "subject": self.subject,
             "subject_type": self.subject_type,
             "degree": self.degree,
+            "discipline": self.discipline,
             "teacher": self.teacher, "student": self.student, "semester": self.semester,
         }
 

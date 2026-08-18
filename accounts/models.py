@@ -3,15 +3,130 @@ import datetime as dt
 from django.conf import settings
 from django.contrib.auth.models import AbstractBaseUser, PermissionsMixin
 from django.db import models
+from django.db.models.signals import post_delete, post_save
+from django.dispatch import receiver
 from django.utils import timezone
 
+from core.enums import RowStatus, revoked_field, status_field
 from core.utils import normalise_email, numeric_otp, random_token, sha256
 
 from .managers import UserManager
 
 
+class Discipline(models.TextChoices):
+    """
+    The broad fields an institute teaches and a university grants affiliation
+    for.
+
+    Declared alphabetically by label, which is also the order they are offered
+    in. The codes are short because they end up in query strings and in a
+    per-discipline affiliation row for every institute.
+    """
+
+    AGRI = "AGRI", "Agriculture, Veterinary & Allied Sciences"
+    DIPLOMA = "DIPLOMA", "Diploma (Polytechnic & ITI)"
+    ENGG = "ENGG", "Engineering, Technology & Management"
+    GENERAL = "GENERAL", "General Courses (Arts, Science, Commerce)"
+    MEDICAL = "MEDICAL", "Medical, Health Sciences, Ayush, Nursing & Paramedical"
+    PHARMACY = "PHARMACY", "Pharmacy"
+
+
+class University(models.Model):
+    """
+    An affiliating university or examination board.
+
+    Holds its own account, so it is a tenant in its own right rather than a
+    lookup row. Two flags are worth separating:
+
+    * `grants_affiliation` — whether institutes may name it as their
+      affiliating body. A university that only wants to invite its own
+      institutes (a private university, say) sets this False and never appears
+      in the institute signup dropdown.
+    * `is_active` — whether the account works at all.
+
+    Disciplines are a many-to-many in effect: several bodies in the shipped
+    list grant affiliation for more than one field, and an institute chooses
+    an affiliating body *per discipline*.
+    """
+
+    name = models.CharField(max_length=200, unique=True)
+    short_name = models.CharField(max_length=40, blank=True)
+    code = models.SlugField(max_length=30, unique=True)
+    email = models.EmailField(unique=True, help_text="Official university email")
+    phone = models.CharField(max_length=20, blank=True)
+    website = models.URLField(blank=True)
+    address = models.TextField(blank=True)
+    state = models.CharField(max_length=60, blank=True)
+    district = models.CharField(max_length=80, blank=True)
+    logo = models.ImageField(upload_to="university/", blank=True, null=True)
+
+    grants_affiliation = models.BooleanField(
+        default=True,
+        help_text="Institutes may name this body as their affiliating "
+                  "university. Turn off for a university that only takes the "
+                  "institutes it invites.")
+    is_active = models.BooleanField(default=True)
+    # True for the ~112 bodies shipped with the app. A seeded row exists before
+    # anyone claims it, so signup matches an existing name instead of creating
+    # a near-duplicate — "Anna University" and "Anna Univ." would otherwise
+    # both exist and split their institutes between them.
+    is_seeded = models.BooleanField(default=False)
+    claimed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["name"]
+        verbose_name_plural = "Universities"
+
+    def __str__(self):
+        return self.short_name or self.name
+
+    @property
+    def is_claimed(self):
+        return self.claimed_at is not None
+
+
+class UniversityDiscipline(models.Model):
+    """
+    One discipline a university covers.
+
+    A join table rather than a comma-separated column because the institute
+    signup dropdown is "affiliating bodies for *this* discipline", which is a
+    query, not a string search.
+    """
+
+    university = models.ForeignKey(University, on_delete=models.CASCADE,
+                                   related_name="disciplines")
+    discipline = models.CharField(max_length=12, choices=Discipline.choices,
+                                  db_index=True)
+
+    class Meta:
+        ordering = ["discipline"]
+        constraints = [
+            models.UniqueConstraint(fields=["university", "discipline"],
+                                    name="uniq_university_discipline"),
+        ]
+
+    def __str__(self):
+        return f"{self.university} · {self.get_discipline_display()}"
+
+
 class Institute(models.Model):
-    """A college / university.  Created by the Head of the Institute."""
+    """A college.  Created by the Head of the Institute, or invited by a university."""
+
+    class Status(models.TextChoices):
+        """
+        Where an institute sits in the approval flow.
+
+        An institute that names an affiliating university starts PENDING and
+        that university decides. One that is autonomous in every discipline, or
+        that a university invited directly, is APPROVED from the start —
+        there is nobody left to ask.
+        """
+
+        PENDING = "PENDING", "Awaiting approval"
+        APPROVED = "APPROVED", "Approved"
+        REJECTED = "REJECTED", "Rejected"
 
     name = models.CharField(max_length=200)
     code = models.SlugField(max_length=30, unique=True)
@@ -19,7 +134,29 @@ class Institute(models.Model):
     phone = models.CharField(max_length=20, blank=True)
     website = models.URLField(blank=True)
     address = models.TextField(blank=True)
+    # Set at signup and not editable afterwards by the institute: an institute
+    # that could move itself between states could move out from under the
+    # university that approved it.
+    state = models.CharField(max_length=60, blank=True, db_index=True)
+    district = models.CharField(max_length=80, blank=True, db_index=True)
     logo = models.ImageField(upload_to="institute/", blank=True, null=True)
+
+    status = models.CharField(max_length=10, choices=Status.choices,
+                              default=Status.APPROVED, db_index=True)
+    # Free text, shown to the institute verbatim in the rejection email. Kept
+    # rather than cleared on a later approval, so the history stays readable.
+    rejection_reason = models.TextField(blank=True)
+    decided_at = models.DateTimeField(null=True, blank=True)
+    decided_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True,
+        blank=True, related_name="institute_decisions")
+    # Set when a university created this institute rather than the institute
+    # registering itself. Distinct from affiliation: a university may invite an
+    # institute it does not affiliate.
+    invited_by = models.ForeignKey(
+        University, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="invited_institutes")
+
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -29,6 +166,77 @@ class Institute(models.Model):
     def __str__(self):
         return self.name
 
+    @property
+    def is_approved(self):
+        return self.status == self.Status.APPROVED
+
+    @property
+    def affiliating_universities(self):
+        """Every university that affiliates this institute, without repeats."""
+        return University.objects.filter(
+            affiliated_institutes__institute=self).distinct()
+
+
+class InstituteAffiliation(models.Model):
+    """
+    One discipline an institute teaches, and who affiliates it for that.
+
+    Per discipline because that is how affiliation actually works: an institute
+    with an engineering wing and a pharmacy wing answers to two different
+    bodies, and a single `institute.university` would force it to mis-file one
+    of them.
+
+    `university = NULL` means autonomous *for this discipline* — which is a
+    real state, not a missing value, and is why the column is nullable rather
+    than the row being absent.
+    """
+
+    institute = models.ForeignKey(Institute, on_delete=models.CASCADE,
+                                  related_name="affiliations")
+    discipline = models.CharField(max_length=12, choices=Discipline.choices,
+                                  db_index=True)
+    university = models.ForeignKey(
+        University, on_delete=models.PROTECT, null=True, blank=True,
+        related_name="affiliated_institutes",
+        help_text="Blank means autonomous for this discipline.")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["discipline"]
+        constraints = [
+            models.UniqueConstraint(fields=["institute", "discipline"],
+                                    name="uniq_institute_discipline"),
+        ]
+
+    def __str__(self):
+        where = self.university or "Autonomous"
+        return f"{self.institute} · {self.get_discipline_display()} · {where}"
+
+    @property
+    def is_autonomous(self):
+        return self.university_id is None
+
+
+@receiver([post_save, post_delete], sender=InstituteAffiliation)
+def _resync_revoked(sender, instance, **kwargs):
+    """
+    Keep `is_revoked` true to the affiliation table.
+
+    A stored denormalised flag is only worth having if nothing can change the
+    thing it summarises without it noticing. The services call `sync_revoked`
+    themselves, but affiliations are also created directly — by the demo
+    seeder, by the admin, by a shell session, by every test fixture — and each
+    of those left the flag stale and the screens wrong.
+
+    A signal is the one place that cannot be bypassed. It is a handful of bulk
+    updates on an action that already reshapes the institute, so the cost is
+    nothing next to being reliably correct.
+    """
+    from academics.curriculum import sync_revoked
+
+    if instance.institute_id:
+        sync_revoked(instance.institute)
+
 
 class User(AbstractBaseUser, PermissionsMixin):
     class Role(models.TextChoices):
@@ -37,15 +245,24 @@ class User(AbstractBaseUser, PermissionsMixin):
         TEACHER = "TEACHER", "Teacher"
         STUDENT = "STUDENT", "Student"
         GUARDIAN = "GUARDIAN", "Guardian"
+        UNIVERSITY = "UNIVERSITY", "University"
 
     email = models.EmailField(unique=True)
     full_name = models.CharField(max_length=150, blank=True)
     phone = models.CharField(max_length=20, blank=True)
-    role = models.CharField(max_length=10, choices=Role.choices, db_index=True)
+    # 12, not 10: "UNIVERSITY" is exactly 10 and would fit, but a column with
+    # no headroom turns the next role into a migration nobody expected.
+    role = models.CharField(max_length=12, choices=Role.choices, db_index=True)
 
     institute = models.ForeignKey(
         Institute, on_delete=models.CASCADE, null=True, blank=True, related_name="users"
     )
+    # Set only on UNIVERSITY accounts, and mutually exclusive with `institute`
+    # in practice: a university user belongs to no single institute, which is
+    # the whole point of the role.
+    university = models.ForeignKey(
+        "accounts.University", on_delete=models.CASCADE, null=True, blank=True,
+        related_name="users")
     department = models.ForeignKey(
         "academics.Department",
         on_delete=models.SET_NULL,
@@ -55,6 +272,65 @@ class User(AbstractBaseUser, PermissionsMixin):
     )
 
     is_active = models.BooleanField(default=True)
+    # Lifecycle and revocation, the same two fields every scoped row carries.
+    # For a person INVITED is a real state: the account exists because somebody
+    # was invited and has not finished signing up.
+    status = status_field()
+    is_revoked = revoked_field()
+    # A teacher switched off by a discipline removal — see the identical field
+    # on academics.Department for why the memory is needed. Only ever set for
+    # teachers; nothing else is touched by that operation.
+    archived_with_discipline = models.BooleanField(default=False, editable=False)
+
+    # ---- identity, for teachers -------------------------------------------- #
+    #
+    # A teacher's PAN is the one identifier that is the *same person* across
+    # institutes. Email is not: somebody changes jobs and gets a new one, and
+    # two colleges would each hold a different account for one teacher with no
+    # way to know. So the rule that only one college may run a teacher at a
+    # time is keyed on this, not on the login.
+    #
+    # Blank for every other role and for the rows that predate this, which is
+    # why it is `blank=True` rather than required at the column: making it
+    # mandatory would have needed a value invented for every existing teacher,
+    # and an invented PAN is worse than an absent one.
+    #
+    # Not unique at the database level. The rule is "one *non-archived* holder",
+    # which is a condition over a column that changes — see accounts/pan.py for
+    # how it is enforced and for the race it cannot close on its own.
+    pan_number = models.CharField(
+        max_length=10, blank=True, db_index=True,
+        help_text="Permanent Account Number. Fixed once saved.")
+    date_of_birth = models.DateField(
+        null=True, blank=True,
+        help_text="Checked against the PAN. Fixed once saved.")
+
+    # ---- suspension, by the affiliating university ------------------------ #
+    #
+    # **A fourth orthogonal fact, not a fourth status.** `status` says what the
+    # institute has done with this account (active, invited, archived);
+    # `is_revoked` says the discipline underneath it is gone; this says the
+    # affiliating university has barred the person. Three different parties,
+    # three different facts, and folding any of them into the others is the
+    # mistake recorded at the top of core/enums.py — a suspension written over
+    # `status` would leave nothing to restore when it was lifted, and would
+    # make "we archived them" and "they were suspended" the same row.
+    #
+    # Only the university that affiliates the teacher's department may set or
+    # clear it. That is the whole point: an institute able to lift it would
+    # make it a note rather than a sanction.
+    is_suspended = models.BooleanField(
+        default=False, db_index=True,
+        help_text="Barred by the affiliating university. Independent of "
+                  "status: a suspended teacher keeps whatever status they had.")
+    suspension_reason = models.TextField(blank=True)
+    suspended_at = models.DateTimeField(null=True, blank=True)
+    # The university rather than the person who clicked: administrators come
+    # and go, and the question "may this account lift the suspension" is about
+    # the body, not the individual.
+    suspended_by = models.ForeignKey(
+        "accounts.University", null=True, blank=True,
+        on_delete=models.SET_NULL, related_name="suspended_teachers")
     is_staff = models.BooleanField(default=False)
     email_verified = models.BooleanField(default=False)
     registration_completed = models.BooleanField(
@@ -101,6 +377,20 @@ class User(AbstractBaseUser, PermissionsMixin):
 
     def save(self, *args, **kwargs):
         self.email = normalise_email(self.email)
+        # The same one-directional sync every scoped model uses: `is_active`
+        # decides running-vs-archived, and for a person `registration_completed`
+        # supplies the third state. Without this an account created with
+        # `is_active=False` kept status ACTIVE and was counted as staff.
+        if not self.is_active:
+            self.status = RowStatus.ARCHIVED
+        elif not self.registration_completed:
+            self.status = RowStatus.INVITED
+        elif self.status != RowStatus.ACTIVE:
+            self.status = RowStatus.ACTIVE
+        # Revocation is the department's fact; a teacher carries a copy so the
+        # staff list can filter on it without a join.
+        if self.department_id and self.role == self.Role.TEACHER:
+            self.is_revoked = self.department.is_revoked
         super().save(*args, **kwargs)
 
     # ---- convenience ------------------------------------------------------ #
@@ -125,9 +415,26 @@ class User(AbstractBaseUser, PermissionsMixin):
         return self.role == self.Role.GUARDIAN
 
     @property
+    def is_university(self):
+        return self.role == self.Role.UNIVERSITY
+
+    @property
     def is_staff_role(self):
-        """Head, HoD or teacher — the roles that administer anything."""
-        return self.role in (self.Role.HEAD, self.Role.HOD, self.Role.TEACHER)
+        """The roles that administer anything, at either tier."""
+        return self.role in (self.Role.HEAD, self.Role.HOD, self.Role.TEACHER,
+                             self.Role.UNIVERSITY)
+
+    @property
+    def is_institute_admin(self):
+        """
+        Head-of-institute authority, whoever is exercising it.
+
+        A university has the same read and write reach over an institute as its
+        head — that is the requirement — so the two answer this the same way.
+        The *scope* they may exercise it over still differs, and that is
+        decided by the selectors, never by this flag.
+        """
+        return self.role in (self.Role.HEAD, self.Role.UNIVERSITY)
 
     @property
     def short_name(self):
@@ -337,7 +644,9 @@ class Invitation(models.Model):
 
     email = models.EmailField(db_index=True)
     full_name = models.CharField(max_length=150, blank=True)
-    role = models.CharField(max_length=10, choices=User.Role.choices)
+    # Widened alongside User.role — the two share a vocabulary, so a role that
+    # fits one and not the other is a bug waiting for the right invitation.
+    role = models.CharField(max_length=12, choices=User.Role.choices)
     institute = models.ForeignKey(Institute, on_delete=models.CASCADE, related_name="invitations")
     department = models.ForeignKey(
         "academics.Department", on_delete=models.CASCADE, null=True, blank=True,

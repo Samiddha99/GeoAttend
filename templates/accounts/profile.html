@@ -100,15 +100,389 @@
   </div>
 
   <div class="col-lg-8">
+    <!--
+      The organisation this account belongs to. Shown to everyone, because
+      "which institute am I signed in to" is a fair question for a teacher as
+      much as a head. Editable only where accounts/identity.py allows it, and
+      the server checks the same rule again — the disabled attribute here is
+      the courtesy, not the lock.
+    -->
+    {% if university %}
+    <div class="card mb-3">
+      <div class="card-header">
+        <i class="fa-solid fa-building-columns me-2 text-muted-2"></i>University
+      </div>
+      <div class="card-body">
+        <form id="org-form">
+          {% csrf_token %}
+          <div class="row g-3">
+            <div class="col-md-8 mb-0">
+              <label class="form-label">University name</label>
+              <input class="form-control" name="name" value="{{ university.name }}" required>
+            </div>
+            <div class="col-md-4 mb-0">
+              <label class="form-label">Short name</label>
+              <input class="form-control" name="short_name" value="{{ university.short_name }}">
+            </div>
+            <div class="col-md-6 mb-0">
+              <label class="form-label">Official university email</label>
+              <input type="email" class="form-control" name="email" value="{{ university.email }}" required>
+              <div class="form-text">
+                The address on your letterhead. Notifications go to your login,
+                not here.
+              </div>
+            </div>
+            <div class="col-md-6 mb-0">
+              <label class="form-label">Code</label>
+              <input class="form-control" name="code" value="{{ university.code }}" required>
+              <div class="form-text">
+                Used in exports and reports. Changing it will not match
+                spreadsheets already downloaded under the old one.
+              </div>
+            </div>
+            <div class="col-md-6 mb-0">
+              <label class="form-label">Phone</label>
+              <input class="form-control" name="phone" value="{{ university.phone }}">
+            </div>
+            <div class="col-md-6 mb-0">
+              <label class="form-label">Website</label>
+              <input type="url" class="form-control" name="website" value="{{ university.website }}">
+            </div>
+            <div class="col-12 mb-0">
+              <label class="form-label">Address</label>
+              <textarea class="form-control" name="address" rows="2">{{ university.address }}</textarea>
+            </div>
+          </div>
+          <button class="btn btn-primary mt-3" type="submit">
+            <i class="fa-solid fa-check me-1"></i>Save university details</button>
+        </form>
+
+        <hr class="my-4">
+        <form id="login-email-form">
+          {% csrf_token %}
+          <label class="form-label">Your login email</label>
+          <div class="input-group">
+            <input type="email" class="form-control" name="email" value="{{ user.email }}" required>
+            <button class="btn btn-light" type="submit">
+              <i class="fa-solid fa-arrow-right-arrow-left me-1"></i>Change</button>
+          </div>
+          <div class="form-text">
+            This is what you sign in with. Changing it takes effect at your next
+            sign-in; you will not be signed out now.
+          </div>
+        </form>
+      </div>
+    </div>
+    {% endif %}
+
+    {% if institute %}
+    <div class="card mb-3">
+      <div class="card-header d-flex align-items-center">
+        <i class="fa-solid fa-school me-2 text-muted-2"></i>Institute
+        {% if is_autonomous %}
+        <span class="ga-pill pill-grey ms-auto">Autonomous</span>
+        {% else %}
+        <span class="ga-pill pill-blue ms-auto" title="Affiliated — your name and official email are held by them">
+          {% for u in affiliating %}{{ u.short_name|default:u.name }}{% if not forloop.last %}, {% endif %}{% endfor %}
+        </span>
+        {% endif %}
+      </div>
+      <div class="card-body">
+        {% if identity_lock_reason %}
+        <div class="alert alert-light border fs-13">
+          <i class="fa-solid fa-lock text-primary me-2"></i>{{ identity_lock_reason }}
+        </div>
+        {% endif %}
+        <form id="org-form">
+          {% csrf_token %}
+          <div class="row g-3">
+            <div class="col-md-8 mb-0">
+              <label class="form-label">
+                Institute name{% if not may_edit_identity %} (locked){% endif %}</label>
+              <input class="form-control" name="name" value="{{ institute.name }}"
+                     {% if may_edit_identity %}required{% else %}disabled{% endif %}>
+            </div>
+            <div class="col-md-4 mb-0">
+              <label class="form-label">
+                Code{% if not may_edit_identity %} (locked){% endif %}</label>
+              <input class="form-control" name="code" value="{{ institute.code }}"
+                     {% if may_edit_identity %}required{% else %}disabled{% endif %}>
+              {% if may_edit_identity %}
+              <div class="form-text">
+                Appears in exports and in the Institute column.
+              </div>
+              {% endif %}
+            </div>
+            <div class="col-md-6 mb-0">
+              <label class="form-label">
+                Official institute email{% if not may_edit_identity %} (locked){% endif %}</label>
+              <input type="email" class="form-control" name="email" value="{{ institute.email }}"
+                     {% if may_edit_identity %}required{% else %}disabled{% endif %}>
+              <div class="form-text">
+                The address on your letterhead. Notifications go to the head's
+                login, not here.
+              </div>
+            </div>
+            <div class="col-md-6 mb-0">
+              <label class="form-label">Where (locked)</label>
+              <input class="form-control"
+                     value="{{ institute.district }}{% if institute.state %}, {{ institute.state }}{% endif %}"
+                     disabled>
+            </div>
+            {% if may_edit_identity %}
+            <div class="col-md-6 mb-0">
+              <label class="form-label">Phone</label>
+              <input class="form-control" name="phone" value="{{ institute.phone }}">
+            </div>
+            <div class="col-md-6 mb-0">
+              <label class="form-label">Website</label>
+              <input type="url" class="form-control" name="website" value="{{ institute.website }}">
+            </div>
+            <div class="col-12 mb-0">
+              <label class="form-label">Address</label>
+              <textarea class="form-control" name="address" rows="2">{{ institute.address }}</textarea>
+            </div>
+            {% endif %}
+          </div>
+          {% if may_edit_identity %}
+          <button class="btn btn-primary mt-3" type="submit">
+            <i class="fa-solid fa-check me-1"></i>Save institute details</button>
+          {% endif %}
+        </form>
+
+        {% if user.is_head %}
+        <hr class="my-4">
+        <!--
+          The head's own login — open to every head, affiliated or not, and
+          deliberately not behind the lock above. The name and official email
+          are the university's record; a login is just how one person reaches
+          their own account. See accounts/views.api_login_email_update.
+        -->
+        <form id="login-email-form">
+          {% csrf_token %}
+          <label class="form-label">Your login email</label>
+          <div class="input-group">
+            <input type="email" class="form-control" name="email" value="{{ user.email }}" required>
+            <button class="btn btn-light" type="submit">
+              <i class="fa-solid fa-arrow-right-arrow-left me-1"></i>Change</button>
+          </div>
+          <div class="form-text">
+            This is what you sign in with. Changing it takes effect at your next
+            sign-in; you will not be signed out now.
+          </div>
+        </form>
+        {% endif %}
+      </div>
+    </div>
+    {% endif %}
+
+    <!--
+      Features 3 and 4: what this institute teaches and who awards each of
+      them, plus a way to record a new one.
+
+      The "add" control offers no university on purpose. Affiliating is a claim
+      about somebody else and only they can make it, so an institute adds a
+      discipline as autonomous and the university converts it if it wants to.
+      The endpoint refuses anything else regardless of what is posted here.
+    -->
+    {% if institute %}
+    <div class="card mb-3">
+      <div class="card-header">
+        <i class="fa-solid fa-certificate me-2 text-muted-2"></i>Disciplines &amp; affiliation
+      </div>
+      <div class="card-body">
+        <div class="table-responsive">
+          <table class="table table-sm align-middle mb-0">
+            <thead><tr>
+              <th>Discipline</th><th>Affiliated to</th><th></th>
+            </tr></thead>
+            <tbody>
+              {% for a in affiliation_rows %}
+              <tr>
+                <td class="fw-600">{{ a.discipline_label }}</td>
+                <td>
+                  {% if a.autonomous %}
+                  <span class="ga-pill pill-grey">Autonomous</span>
+                  {% else %}
+                  <span class="ga-pill pill-blue">
+                    <i class="fa-solid fa-building-columns me-1"></i>{{ a.university }}</span>
+                  {% endif %}
+                </td>
+                <td class="text-end">
+                  <!--
+                    Autonomous rows only. An affiliated discipline is a record
+                    about the university as much as about us, so removing it
+                    from a settings page is not a decision this screen can
+                    make — they delink first. The endpoint refuses it too.
+                  -->
+                  {% if user.is_head %}
+                    {% if a.autonomous %}
+                    <button class="btn btn-light btn-sm text-danger disc-remove"
+                            data-code="{{ a.discipline }}"
+                            data-label="{{ a.discipline_label }}"
+                            title="Remove this discipline">
+                      <i class="fa-solid fa-trash"></i></button>
+                    {% else %}
+                    <span class="text-muted-2 fs-12"
+                          title="Ask {{ a.university }} to delink it first">
+                      <i class="fa-solid fa-lock"></i></span>
+                    {% endif %}
+                  {% endif %}
+                </td>
+              </tr>
+              {% empty %}
+              <tr><td colspan="3" class="text-muted-2">
+                No disciplines on file yet.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+
+        {% if user.is_head %}
+        {% if available_disciplines %}
+        <hr class="my-3">
+        <form id="discipline-form">
+          {% csrf_token %}
+          <label class="form-label">Add a discipline</label>
+          <div class="row g-2">
+            {% for d in available_disciplines %}
+            <div class="col-md-6">
+              <div class="form-check border rounded-3 p-2 ps-4 mb-0">
+                <input class="form-check-input" type="checkbox" name="disciplines"
+                       value="{{ d.value }}" id="add-{{ d.value }}">
+                <label class="form-check-label fs-13" for="add-{{ d.value }}">
+                  {{ d.label }}</label>
+              </div>
+            </div>
+            {% endfor %}
+          </div>
+          <div class="alert alert-light border fs-13 mt-3 mb-0">
+            <i class="fa-solid fa-circle-info text-primary me-2"></i>
+            Anything you add here is recorded as <b>autonomous</b> — you award
+            the degrees yourself. If it should sit under a university, ask them
+            to add it: only they can put their name to it.
+          </div>
+          <button class="btn btn-primary mt-3" type="submit">
+            <i class="fa-solid fa-plus me-1"></i>Add as autonomous</button>
+        </form>
+        {% else %}
+        <hr class="my-3">
+        <p class="text-muted-2 fs-13 mb-0">
+          Every discipline is already on file.
+        </p>
+        {% endif %}
+        {% endif %}
+      </div>
+    </div>
+    {% endif %}
+
+{% if university %}
+<!--
+  The university's own coverage. Deliberately the same shape as the institute
+  card above — a table, a remove control per row, an add form below — because
+  they are the same job seen from the two sides, and a person who administers
+  both should not have to learn two screens.
+
+  The one difference is what the counts mean. An institute's discipline holds
+  students; a university's holds a published catalogue and a list of colleges.
+  See accounts/coverage.py.
+-->
+<div class="card mb-3">
+  <div class="card-header">
+    <i class="fa-solid fa-certificate me-2 text-muted-2"></i>Disciplines you award
+  </div>
+  <div class="card-body">
+    <div class="table-responsive">
+      <table class="table table-sm align-middle mb-0">
+        <thead><tr>
+          <th>Discipline</th>
+          <th class="text-center">Published departments</th>
+          <th class="text-center">Institutes affiliated</th>
+          <th></th>
+        </tr></thead>
+        <tbody>
+          {% for d in coverage_rows %}
+          <tr>
+            <td class="fw-600">{{ d.discipline_label }}</td>
+            <td class="text-center">
+              {% if d.departments %}<span class="ga-pill pill-blue">{{ d.departments }}</span>
+              {% else %}<span class="text-muted-2">none</span>{% endif %}
+            </td>
+            <td class="text-center">
+              {% if d.institutes %}<span class="ga-pill pill-violet">{{ d.institutes }}</span>
+              {% else %}<span class="text-muted-2">none</span>{% endif %}
+            </td>
+            <td class="text-end">
+              <button class="btn btn-light btn-sm text-danger cov-remove"
+                      data-code="{{ d.discipline }}"
+                      data-label="{{ d.discipline_label }}"
+                      title="Stop awarding this discipline">
+                <i class="fa-solid fa-trash"></i></button>
+            </td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="4" class="text-muted-2">
+            No disciplines on file yet. Institutes cannot affiliate to you
+            until you add one.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    {% if coverage_available %}
+    <hr class="my-3">
+    <form id="coverage-form">
+      {% csrf_token %}
+      <label class="form-label">Add a discipline</label>
+      <div class="row g-2">
+        {% for d in coverage_available %}
+        <div class="col-md-6">
+          <div class="form-check border rounded-3 p-2 ps-4 mb-0">
+            <input class="form-check-input" type="checkbox" name="disciplines"
+                   value="{{ d.value }}" id="cov-{{ d.value }}">
+            <label class="form-check-label fs-13" for="cov-{{ d.value }}">
+              {{ d.label }}</label>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+      <div class="alert alert-light border fs-13 mt-3 mb-0">
+        <i class="fa-solid fa-circle-info text-primary me-2"></i>
+        Adding one makes you selectable as an affiliating body for it, and lets
+        you publish departments for it in your catalogue. Nobody is affiliated
+        automatically — colleges still ask, and you still approve.
+      </div>
+      <button class="btn btn-primary mt-3" type="submit">
+        <i class="fa-solid fa-plus me-1"></i>Add discipline</button>
+    </form>
+    {% else %}
+    <hr class="my-3">
+    <p class="text-muted-2 fs-13 mb-0">Every discipline is already on file.</p>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+
     <div class="card mb-3">
       <div class="card-header"><i class="fa-solid fa-user-pen me-2 text-muted-2"></i>Personal details</div>
       <div class="card-body">
         <form id="profile-form">
           {% csrf_token %}
           <div class="row g-3">
+            <!--
+              A teacher's name is not theirs to change: it was verified against
+              their PAN when the institute added them. `disabled`, not
+              `readonly`, so the field is not submitted at all — and the form
+              drops it server-side regardless, which is what actually enforces
+              this. See accounts/identity.may_edit_own_name.
+            -->
             <div class="col-md-6 mb-0">
               <label class="form-label">Full name</label>
-              <input class="form-control" name="full_name" value="{{ user.full_name }}">
+              <input class="form-control" name="full_name" value="{{ user.full_name }}"
+                     {% if own_name_locked %}disabled{% endif %}>
+              {% if own_name_locked %}
+              <div class="form-text">{{ own_name_locked }}</div>
+              {% endif %}
             </div>
             <div class="col-md-6 mb-0">
               <label class="form-label">Mobile</label>
@@ -117,7 +491,15 @@
             <div class="col-md-6 mb-0">
               <label class="form-label">Email (locked)</label>
               <input class="form-control" value="{{ user.email }}" disabled>
-              <div class="form-text">Your email was set by your institute and can't be changed here.</div>
+              <div class="form-text">
+                {% if may_edit_identity and user.is_head %}
+                This is your login. Change it under Institute above.
+                {% elif user.is_university %}
+                This is your login and cannot be changed here.
+                {% else %}
+                Your email was set by your institute and can't be changed here.
+                {% endif %}
+              </div>
             </div>
             <div class="col-md-6 mb-0">
               <label class="form-label">Role (locked)</label>
@@ -154,6 +536,142 @@
     </div>
   </div>
 </div>
+
+<!--
+  Removing a discipline, and deciding what happens to what is inside it.
+
+  The choice is not defaulted. Defaulting to "keep" would quietly leave a wing
+  of the college live after the head thought they had closed it; defaulting to
+  "archive" would hide years of records because somebody clicked through a
+  modal. So neither radio is pre-selected and the button stays disabled until
+  one is picked.
+
+  The counts are fetched when the modal opens rather than rendered with the
+  page: they change as the institute works, and a stale "0 students" is exactly
+  the number that makes this feel safe when it is not.
+-->
+<div class="modal fade" id="cov-remove-modal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content"><form id="cov-remove-form">{% csrf_token %}
+      <input type="hidden" name="discipline" id="cov-code">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="fa-solid fa-trash me-2 text-danger"></i>
+          Stop awarding <span id="cov-label"></span></h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <p class="fs-13 text-muted-2">
+          The discipline goes back to the list you can add from. What happens
+          to the catalogue you publish for it is up to you.
+        </p>
+
+        <div class="border rounded-3 p-3 mb-3" id="cov-counts">
+          <div class="text-muted-2 fs-13">Counting…</div>
+        </div>
+
+        <!--
+          Stated before the choice, not inside it, because it is not a choice.
+          An affiliation is a claim that this university awards the degree; the
+          moment it does not, the row cannot stand. The colleges keep their
+          departments, students and attendance — see accounts/coverage.py.
+        -->
+        <div class="alert alert-warning fs-13" id="cov-delink-note"></div>
+
+        <div class="form-check border rounded-3 p-3 ps-5 mb-2">
+          <input class="form-check-input" type="radio" name="contents"
+                 value="keep" id="cov-keep">
+          <label class="form-check-label" for="cov-keep">
+            <span class="fw-600">Keep your catalogue</span>
+            <div class="form-text mb-0">
+              The departments, batches and subjects you publish for it stay
+              exactly as they are. Nobody can adopt them while the discipline
+              is off your record; re-adding it puts them straight back on offer.
+            </div>
+          </label>
+        </div>
+
+        <div class="form-check border rounded-3 p-3 ps-5 mb-0">
+          <input class="form-check-input" type="radio" name="contents"
+                 value="archive" id="cov-archive">
+          <label class="form-check-label" for="cov-archive">
+            <span class="fw-600">Archive your catalogue for it</span>
+            <div class="form-text mb-0">
+              Those departments, batches and subjects are marked archived.
+              <b>Nothing is deleted</b>, and no college's copy is touched —
+              theirs carry on as their own.
+            </div>
+          </label>
+        </div>
+
+        <div class="invalid-feedback d-block" id="cov-remove-err"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+        <button type="submit" class="btn btn-danger" id="cov-remove-go" disabled>
+          Stop awarding it</button>
+      </div>
+    </form></div>
+  </div>
+</div>
+
+<div class="modal fade" id="disc-remove-modal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content"><form id="disc-remove-form">{% csrf_token %}
+      <input type="hidden" name="discipline" id="disc-code">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="fa-solid fa-trash me-2 text-danger"></i>
+          Remove <span id="disc-label"></span></h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <p class="fs-13 text-muted-2">
+          The discipline goes back to the list you can add from. What happens to
+          the departments and people in it is up to you.
+        </p>
+
+        <div class="border rounded-3 p-3 mb-3" id="disc-counts">
+          <div class="text-muted-2 fs-13">Counting…</div>
+        </div>
+
+        <div class="form-check border rounded-3 p-3 ps-5 mb-2">
+          <input class="form-check-input" type="radio" name="contents"
+                 value="keep" id="c-keep">
+          <label class="form-check-label" for="c-keep">
+            <span class="fw-600">Keep everything</span>
+            <div class="form-text mb-0">
+              Departments, batches, students and teachers carry on exactly as
+              they are. They simply stop being tied to a discipline — the same
+              state as a department created before this setting existed, and
+              still entirely yours to manage.
+            </div>
+          </label>
+        </div>
+
+        <div class="form-check border rounded-3 p-3 ps-5 mb-0">
+          <input class="form-check-input" type="radio" name="contents"
+                 value="archive" id="c-archive">
+          <label class="form-check-label" for="c-archive">
+            <span class="fw-600">Archive everything in it</span>
+            <div class="form-text mb-0">
+              Departments, subjects, batches, students and teachers are
+              deactivated and disappear from every screen.
+              <b>Nothing is deleted</b> — attendance, feedback and absence
+              history are all kept, and re-adding the discipline brings it back.
+            </div>
+          </label>
+        </div>
+
+        <div class="invalid-feedback d-block" id="disc-remove-err"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+        <button type="submit" class="btn btn-danger" id="disc-remove-go" disabled>
+          Remove discipline</button>
+      </div>
+    </form></div>
+  </div>
+</div>
+
 {% endblock %}
 
 {% block scripts %}
@@ -165,6 +683,142 @@ $(function(){
       $(".ga-side-foot .fw-600, .ga-topbar .fw-600").first().text(res.data.full_name);
     }});
   });
+  $("#org-form").on("submit", function(e){
+    e.preventDefault();
+    GA.submit($(this), { url:"{% url 'accounts:api_organisation_update' %}" });
+  });
+  $("#login-email-form").on("submit", function(e){
+    e.preventDefault();
+    GA.submit($(this), { url:"{% url 'accounts:api_login_email_update' %}" });
+  });
+  $("#discipline-form").on("submit", function(e){
+    e.preventDefault();
+    GA.submit($(this), {
+      url:"{% url 'accounts:api_add_disciplines' %}",
+      onSuccess:function(){ setTimeout(()=>location.reload(), 900); }
+    });
+  });
+  const discModal = new bootstrap.Modal("#disc-remove-modal");
+
+  $(document).on("click", ".disc-remove", function(){
+    const code = $(this).attr("data-code");
+    $("#disc-code").val(code);
+    $("#disc-label").text($(this).attr("data-label"));
+    $("#disc-remove-err").text("");
+    $("#disc-remove-form input[name=contents]").prop("checked", false);
+    $("#disc-remove-go").prop("disabled", true);
+    $("#disc-counts").html('<div class="text-muted-2 fs-13">Counting…</div>');
+    discModal.show();
+
+    GA.get("/auth/api/profile/disciplines/" + code + "/contents/", {}, {quiet:true})
+      .done(function(res){
+        const c = res.data.counts;
+        const items = [["Departments", c.departments], ["Subjects", c.subjects],
+                       ["Batches", c.batches], ["Students", c.students],
+                       ["Teachers", c.teachers]];
+        const any = items.some(function(i){ return i[1] > 0; });
+        $("#disc-counts").html(any
+          ? '<div class="fs-13 fw-600 mb-2">What is in it now</div><div class="row g-2">'+
+            items.map(function(i){
+              return '<div class="col-6"><div class="d-flex justify-content-between">'+
+                '<span class="text-muted-2 fs-13">'+i[0]+'</span>'+
+                '<span class="fw-600">'+i[1]+'</span></div></div>';
+            }).join("")+'</div>'
+          : '<div class="fs-13 text-muted-2">Nothing is in this discipline yet, '+
+            'so both options do the same thing.</div>');
+      })
+      .fail(function(){
+        $("#disc-counts").html('<div class="fs-13 text-danger">'+
+          'Could not read what is in this discipline. Removing it anyway is '+
+          'still safe — nothing here deletes data.</div>');
+      });
+  });
+
+  $("#disc-remove-form").on("change", "input[name=contents]", function(){
+    $("#disc-remove-go").prop("disabled", false);
+  });
+
+  $("#disc-remove-form").on("submit", function(e){
+    e.preventDefault();
+    GA.submit($(this), {
+      url:"{% url 'accounts:api_remove_discipline' %}",
+      onSuccess:function(){ discModal.hide(); setTimeout(()=>location.reload(), 900); }
+    });
+  });
+
+  /*
+    The university's own coverage. Same shape as the block above; the one
+    difference is the delink warning, which is stated rather than offered —
+    an affiliation to a body that no longer awards the degree cannot stand.
+    See accounts/coverage.py.
+  */
+  const covModal = new bootstrap.Modal("#cov-remove-modal");
+
+  $(document).on("click", ".cov-remove", function(){
+    const code = $(this).attr("data-code");
+    $("#cov-code").val(code);
+    $("#cov-label").text($(this).attr("data-label"));
+    $("#cov-remove-err").text("");
+    $("#cov-remove-form input[name=contents]").prop("checked", false);
+    $("#cov-remove-go").prop("disabled", true);
+    $("#cov-counts").html('<div class="text-muted-2 fs-13">Counting…</div>');
+    $("#cov-delink-note").hide();
+    covModal.show();
+
+    GA.get("/auth/api/profile/coverage/" + code + "/contents/", {}, {quiet:true})
+      .done(function(res){
+        const c = res.data.counts;
+        const items = [["Departments", c.departments], ["Subjects", c.subjects],
+                       ["Batches", c.batches]];
+        const any = items.some(function(i){ return i[1] > 0; });
+        $("#cov-counts").html(any
+          ? '<div class="fs-13 fw-600 mb-2">In your catalogue for it</div><div class="row g-2">'+
+            items.map(function(i){
+              return '<div class="col-4"><div class="d-flex justify-content-between">'+
+                '<span class="text-muted-2 fs-13">'+i[0]+'</span>'+
+                '<span class="fw-600">'+i[1]+'</span></div></div>';
+            }).join("")+'</div>'
+          : '<div class="fs-13 text-muted-2">You publish nothing for this '+
+            'discipline, so both options do the same thing.</div>');
+
+        if (c.institutes) {
+          $("#cov-delink-note").html(
+            '<i class="fa-solid fa-triangle-exclamation me-2"></i>'+
+            '<b>'+c.institutes+' institute(s) are affiliated to you for this '+
+            'discipline.</b> They will become autonomous in it — their '+
+            'departments, batches, subjects, students and attendance are all '+
+            'kept and become theirs to manage. This part is not optional: an '+
+            'affiliation to a university that no longer awards the degree is '+
+            'a claim nobody can back.').show();
+        }
+      })
+      .fail(function(){
+        $("#cov-counts").html('<div class="fs-13 text-danger">'+
+          'Could not read what is in this discipline. Withdrawing it anyway is '+
+          'still safe — nothing here deletes data.</div>');
+      });
+  });
+
+  $("#cov-remove-form").on("change", "input[name=contents]", function(){
+    $("#cov-remove-go").prop("disabled", false);
+  });
+
+  $("#coverage-form").on("submit", function(e){
+    e.preventDefault();
+    GA.submit($(this), {
+      url:"{% url 'accounts:api_add_coverage' %}",
+      onSuccess:function(){ setTimeout(()=>location.reload(), 900); }
+    });
+  });
+
+  $("#cov-remove-form").on("submit", function(e){
+    e.preventDefault();
+    GA.submit($(this), {
+      url:"{% url 'accounts:api_remove_coverage' %}",
+      onSuccess:function(){ covModal.hide(); setTimeout(()=>location.reload(), 900); }
+    });
+  });
+
   $("#password-form").on("submit", function(e){
     e.preventDefault();
     const $f = $(this);

@@ -14,14 +14,25 @@ from . import template_service as ts
 from .models import AlertCampaign, WhatsAppTemplate
 from .whatsapp import is_configured, send_whatsapp
 
-HEAD, HOD, TEACHER = "HEAD", "HOD", "TEACHER"
+HEAD, HOD, TEACHER, UNIVERSITY = "HEAD", "HOD", "TEACHER", "UNIVERSITY"
+
+
+def template_owner(user):
+    """
+    Who owns the WhatsApp templates this account uses.
+
+    The one place university access is narrower than a head's: a university
+    has its own wording, registered against its own sender, and never the
+    institutes'. See notifications.template_service.templates_for.
+    """
+    return user.university if getattr(user, "is_university", False) else user.institute
 MAX_PER_SEND = 500
 
 
 # --------------------------------------------------------------------------- #
 #  Page
 # --------------------------------------------------------------------------- #
-@role_required(HEAD, HOD, TEACHER)
+@role_required(HEAD, HOD, TEACHER, UNIVERSITY)
 @ensure_csrf_cookie
 def alerts_page(request):
     from django.utils import timezone
@@ -30,7 +41,7 @@ def alerts_page(request):
     # that landed since the last visit has to be picked up before the lists
     # below are built. ts.autosync() polls only undecided templates, throttles
     # repeats and uses a short timeout, so the usual case costs nothing.
-    ts.autosync(request.user.institute)
+    ts.autosync(template_owner(request.user))
 
     return render(request, "notifications/alerts.html", {
         "departments": departments_for(request.user),
@@ -45,14 +56,15 @@ def alerts_page(request):
             request.user, WhatsAppTemplate.Audience.STUDENT, approved_only=True),
         "guardian_templates": ts.templates_for(
             request.user, WhatsAppTemplate.Audience.GUARDIAN, approved_only=True),
-        "can_manage_templates": request.user.is_head,
+        # A university registers its own templates; so does a head.
+        "can_manage_templates": request.user.is_head or request.user.is_university,
     })
 
 
 # --------------------------------------------------------------------------- #
 #  Drafting
 # --------------------------------------------------------------------------- #
-@role_required(HEAD, HOD, TEACHER)
+@role_required(HEAD, HOD, TEACHER, UNIVERSITY)
 @require_GET
 def api_defaults(request):
     """The starting wording for a scope — senders edit it before sending."""
@@ -90,7 +102,7 @@ def _parse_request(request, source):
             "filters": filters}, None
 
 
-@role_required(HEAD, HOD, TEACHER)
+@role_required(HEAD, HOD, TEACHER, UNIVERSITY)
 @require_GET
 def api_recipients(request):
     """Who would be messaged, given the current scope/threshold/filters."""
@@ -145,7 +157,7 @@ def _resolve_template(request, field, audience):
     return template, None
 
 
-@role_required(HEAD, HOD, TEACHER)
+@role_required(HEAD, HOD, TEACHER, UNIVERSITY)
 @require_POST
 def api_preview(request):
     """Render the drafts against one real recipient."""
@@ -178,7 +190,7 @@ def api_preview(request):
 # --------------------------------------------------------------------------- #
 #  Sending
 # --------------------------------------------------------------------------- #
-@role_required(HEAD, HOD, TEACHER)
+@role_required(HEAD, HOD, TEACHER, UNIVERSITY)
 @require_POST
 def api_send(request):
     parsed, error = _parse_request(request, request.POST)
@@ -260,7 +272,10 @@ def api_send(request):
 #  History
 # --------------------------------------------------------------------------- #
 def _visible_campaigns(user):
-    qs = AlertCampaign.objects.filter(institute=user.institute).select_related(
+    from accounts.scoping import institutes_for
+
+    qs = AlertCampaign.objects.filter(
+        institute__in=institutes_for(user)).select_related(
         "created_by", "subject"
     )
     if user.role == TEACHER:
@@ -293,14 +308,14 @@ def _campaign_dict(campaign):
     }
 
 
-@role_required(HEAD, HOD, TEACHER)
+@role_required(HEAD, HOD, TEACHER, UNIVERSITY)
 @require_GET
 def api_campaigns(request):
     rows = [_campaign_dict(c) for c in _visible_campaigns(request.user)[:100]]
     return ok({"rows": rows})
 
 
-@role_required(HEAD, HOD, TEACHER)
+@role_required(HEAD, HOD, TEACHER, UNIVERSITY)
 @require_GET
 def api_campaign_detail(request, pk):
     campaign = get_object_or_404(_visible_campaigns(request.user), pk=pk)
@@ -319,7 +334,7 @@ def api_campaign_detail(request, pk):
     return ok({"campaign": _campaign_dict(campaign), "rows": rows})
 
 
-@role_required(HEAD, HOD)
+@role_required(HEAD, HOD, UNIVERSITY)
 @require_POST
 def api_whatsapp_test(request):
     """Fire one message at a number of the sender's choosing, to prove wiring."""
@@ -346,7 +361,7 @@ def api_whatsapp_test(request):
 #  its wording once and Meta approves it.  Everyone else picks from the approved
 #  list; only the head can write or submit one.
 # --------------------------------------------------------------------------- #
-@role_required(HEAD)
+@role_required(HEAD, UNIVERSITY)
 @ensure_csrf_cookie
 def templates_page(request):
     return render(request, "notifications/templates.html", {
@@ -362,14 +377,14 @@ def templates_page(request):
     })
 
 
-@role_required(HEAD)
+@role_required(HEAD, UNIVERSITY)
 @require_GET
 def api_templates(request):
     # Synced here rather than in templates_page() so the page paints first and
     # the table's loading skeleton covers the wait.
     ts.autosync(request.user.institute)
     rows = [ts.serialise(t) for t in ts.templates_for(request.user)
-            .select_related("created_by")]
+            .select_related("created_by", "institute")]
     return ok({
         "rows": rows,
         "live": is_configured(),
@@ -377,7 +392,7 @@ def api_templates(request):
     })
 
 
-@role_required(HEAD)
+@role_required(HEAD, UNIVERSITY)
 @require_POST
 def api_template_create(request):
     audience = (request.POST.get("audience") or "").upper()
@@ -398,7 +413,9 @@ def api_template_create(request):
         return fail("Unknown WhatsApp category.")
 
     template = ts.create_template(
-        institute=request.user.institute, user=request.user, audience=audience,
+        institute=request.user.institute, university=template_owner(request.user)
+        if request.user.is_university else None,
+        user=request.user, audience=audience,
         name=name, body=body, category=category,
         language=(request.POST.get("language") or "en").strip()[:10],
     )
@@ -413,7 +430,7 @@ def api_template_create(request):
         "few hours — use Refresh to check."))
 
 
-@role_required(HEAD)
+@role_required(HEAD, UNIVERSITY)
 @require_POST
 def api_template_resubmit(request, pk):
     template = get_object_or_404(ts.templates_for(request.user), pk=pk)
@@ -425,7 +442,7 @@ def api_template_resubmit(request, pk):
     return ok(ts.serialise(template), message="Resubmitted for approval.")
 
 
-@role_required(HEAD)
+@role_required(HEAD, UNIVERSITY)
 @require_POST
 def api_template_sync(request, pk=None):
     """Poll Twilio for the latest verdict — one template, or every pending one."""
@@ -445,7 +462,7 @@ def api_template_sync(request, pk=None):
               message=f"Checked {len(updated)} template(s); {approved} now approved.")
 
 
-@role_required(HEAD)
+@role_required(HEAD, UNIVERSITY)
 @require_POST
 def api_template_delete(request, pk):
     template = get_object_or_404(ts.templates_for(request.user), pk=pk)
@@ -460,7 +477,7 @@ def api_template_delete(request, pk):
     return ok(message=f"'{template.name}' removed from the picker.{note}")
 
 
-@role_required(HEAD)
+@role_required(HEAD, UNIVERSITY)
 @require_POST
 def api_template_preview(request, pk):
     """Render a template against a real low-attendance student."""

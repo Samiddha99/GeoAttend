@@ -1,0 +1,259 @@
+{% extends "layouts/base.html" %}
+{% block title %}Register your university · {{ SITE_NAME }}{% endblock %}
+{% block body %}
+<div class="ga-auth">
+  {% include "partials/auth_visual.html" %}
+  <div class="ga-auth-form">
+    <div class="ga-auth-box wide">
+
+      <div class="ga-steps">
+        <div class="ga-step active" data-step="1"><div class="bar"></div><div class="cap">University</div></div>
+        <div class="ga-step" data-step="2"><div class="bar"></div><div class="cap">Your account</div></div>
+        <div class="ga-step" data-step="3"><div class="bar"></div><div class="cap">Verify email</div></div>
+      </div>
+
+      <form id="signup-form" novalidate>
+        {% csrf_token %}
+        <input type="hidden" name="existing" id="f-existing">
+
+        <!-- step 1 -->
+        <div class="step-pane" data-pane="1">
+          <h4 class="fw-bold mb-1">Register your university or board</h4>
+          <p class="text-muted-2 mb-4">
+            Affiliating universities, examination boards and directorates all
+            register here.
+          </p>
+
+          <!--
+            Claiming a listed body reuses its record instead of creating a
+            near-duplicate. Without this, "Anna University" and "Anna Univ."
+            become two accounts that cannot see each other's institutes — and
+            an institute affiliated to one is invisible to the other.
+          -->
+          <div class="mb-3">
+            <label class="form-label">Are you on our list?</label>
+            <select class="form-select" id="f-seeded">
+              <option value="">Loading the list…</option>
+            </select>
+            <div class="form-text">
+              Picking your university fills the form and claims the existing
+              record, so your institutes all land in one account.
+            </div>
+          </div>
+
+          <div class="row g-3">
+            <div class="col-md-8 mb-0">
+              <label class="form-label">University / board name *</label>
+              <input class="form-control" name="university_name" id="f-name" required>
+            </div>
+            <div class="col-md-4 mb-0">
+              <label class="form-label">Short name</label>
+              <input class="form-control" name="short_name">
+            </div>
+            <div class="col-md-4 mb-0">
+              <label class="form-label">Code *</label>
+              <input class="form-control text-uppercase" name="university_code" required>
+            </div>
+            <div class="col-md-8 mb-0">
+              <label class="form-label">Official email *</label>
+              <input type="email" class="form-control" name="university_email" required>
+            </div>
+            <div class="col-md-6 mb-0">
+              <label class="form-label">Phone</label>
+              <input class="form-control" name="phone">
+            </div>
+            <div class="col-md-6 mb-0">
+              <label class="form-label">Website</label>
+              <input type="url" class="form-control" name="website">
+            </div>
+            <div class="col-12 mb-0">
+              <label class="form-label">Address</label>
+              <textarea class="form-control" name="address" rows="1"></textarea>
+            </div>
+            {% include "partials/place_picker.html" %}
+          </div>
+
+          <hr class="my-4">
+          <h5 class="fw-bold mb-1">What do you cover?</h5>
+          <p class="text-muted-2 fs-13 mb-3">
+            Institutes choose an affiliating body per discipline, so this is
+            what decides where you appear on their registration form.
+          </p>
+          <div class="row g-2 mb-3">
+            {% for d in disciplines %}
+            <div class="col-md-6">
+              <div class="form-check border rounded-3 p-2 ps-4 mb-0">
+                <input class="form-check-input d-pick" type="checkbox" name="disciplines"
+                       value="{{ d.value }}" id="d-{{ d.value }}">
+                <label class="form-check-label" for="d-{{ d.value }}">{{ d.label }}</label>
+              </div>
+            </div>
+            {% endfor %}
+          </div>
+          <div class="invalid-feedback d-block" id="disciplines-err"></div>
+
+          <div class="form-check border rounded-3 p-3 ps-5 mb-0" style="background:#f8fafc">
+            <input class="form-check-input" type="checkbox" name="grants_affiliation"
+                   id="f-grants" checked>
+            <label class="form-check-label fw-600" for="f-grants">
+              We affiliate institutes</label>
+            <div class="form-text mb-0">
+              Institutes will be able to name you as their affiliating body
+              when they register, and you approve them. Leave this off if you
+              only work with institutes you invite yourself — you can still
+              invite them either way.
+            </div>
+          </div>
+
+          <button type="button" class="btn btn-primary w-100 mt-4 btn-lg" data-next="2">
+            Continue <i class="fa-solid fa-arrow-right ms-2"></i>
+          </button>
+          <div class="text-center mt-3">
+            <small class="text-muted-2">Registering a college instead?
+              <a href="{% url 'accounts:signup' %}" class="fw-600">Register an institute</a></small>
+          </div>
+        </div>
+
+        <!-- step 2 -->
+        <div class="step-pane d-none" data-pane="2">
+          <h4 class="fw-bold mb-1">Your login</h4>
+          <p class="text-muted-2 mb-4">We'll email a 6-digit code to this address to verify it.</p>
+          <div class="row g-3">
+            <div class="col-md-6 mb-0">
+              <label class="form-label">Your full name *</label>
+              <input class="form-control" name="admin_name" required>
+            </div>
+            <div class="col-md-6 mb-0">
+              <label class="form-label">Your email *</label>
+              <input type="email" class="form-control" name="admin_email" required>
+            </div>
+            <div class="col-md-6 mb-0">
+              <label class="form-label">Your phone</label>
+              <input class="form-control" name="admin_phone">
+            </div>
+            <div class="col-md-6 mb-0">
+              <label class="form-label">Password *</label>
+              <input type="password" class="form-control" name="password1" id="pw1" required>
+            </div>
+            <div class="col-md-6 mb-0">
+              <label class="form-label">Confirm password *</label>
+              <input type="password" class="form-control" name="password2" required>
+            </div>
+          </div>
+          <div class="d-flex gap-2 mt-4">
+            <button type="button" class="btn btn-light btn-lg" data-back="1">
+              <i class="fa-solid fa-arrow-left"></i></button>
+            <button type="submit" class="btn btn-primary btn-lg flex-grow-1">
+              Send verification code</button>
+          </div>
+        </div>
+      </form>
+
+      <!-- step 3 -->
+      <div class="step-pane d-none" data-pane="3">
+        <h4 class="fw-bold mb-1">Check your email</h4>
+        <p class="text-muted-2 mb-4">
+          We sent a 6-digit code to <b id="sent-to"></b>.</p>
+        <form id="otp-form" novalidate>
+          {% csrf_token %}
+          <input class="form-control form-control-lg text-center ga-otp" name="code"
+                 inputmode="numeric" maxlength="6" placeholder="––––––" required>
+          <button class="btn btn-primary w-100 btn-lg mt-3" type="submit">
+            Create the account</button>
+        </form>
+      </div>
+
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+{{ districts_json|json_script:"districts-data" }}
+<style>.ga-otp{letter-spacing:.6rem;font-weight:700}</style>
+<script>
+$(function(){
+  const $form = $("#signup-form");
+  const DISTRICTS = JSON.parse(document.getElementById("districts-data").textContent);
+
+  function goto(step){
+    $(".step-pane").addClass("d-none").filter('[data-pane="'+step+'"]').removeClass("d-none");
+    $(".ga-step").each(function(){
+      const s = +$(this).data("step");
+      $(this).toggleClass("active", s === step).toggleClass("done", s < step);
+    });
+    window.scrollTo({top:0, behavior:"smooth"});
+  }
+
+  /* state → district, same as the institute form */
+  $("#f-state").on("change", function(){
+    const list = DISTRICTS[$(this).val()] || [];
+    $("#f-district")
+      .prop("disabled", !list.length)
+      .html(list.length
+        ? '<option value="">Choose…</option>' +
+          list.map(d => '<option value="'+GA.esc(d)+'">'+GA.esc(d)+'</option>').join("")
+        : '<option value="">Choose a state first</option>');
+  });
+
+  /* claiming a listed body */
+  let seeded = [];
+  GA.get("{% url 'accounts:api_seeded_universities' %}").done(function(res){
+    seeded = res.data.rows || [];
+    $("#f-seeded").html(
+      '<option value="">Not listed — register a new one</option>' +
+      seeded.map(r => '<option value="'+GA.esc(r.id)+'">'+GA.esc(r.name)+'</option>').join(""));
+  });
+
+  $("#f-seeded").on("change", function(){
+    const row = seeded.find(r => r.id === $(this).val());
+    $("#f-existing").val(row ? row.id : "");
+    if (!row) return;
+    $("#f-name").val(row.name);
+    // Pre-tick the disciplines the list already records, so a body that only
+    // needs to confirm them does not retype what we shipped.
+    $(".d-pick").prop("checked", false);
+    (row.disciplines || []).forEach(function(d){
+      $('.d-pick[value="'+d+'"]').prop("checked", true);
+    });
+  });
+
+  $("[data-next]").on("click", function(){
+    let ok = true;
+    $('.step-pane[data-pane="1"] [required]').each(function(){
+      const bad = !$(this).val().trim();
+      $(this).toggleClass("is-invalid", bad);
+      if (bad) ok = false;
+    });
+    if (!$(".d-pick:checked").length){
+      $("#disciplines-err").text("Choose at least one discipline.");
+      ok = false;
+    } else { $("#disciplines-err").text(""); }
+    if (!ok) { GA.toast("Please fill the required fields.", "warn"); return; }
+    goto(2);
+  });
+  $("[data-back]").on("click", function(){ goto(+$(this).data("back")); });
+
+  $form.on("submit", function(e){
+    e.preventDefault();
+    GA.submit($form, {
+      url: "{% url 'accounts:api_university_signup_start' %}",
+      busyText: "Sending the code…",
+      onSuccess: function(res){
+        $("#sent-to").text(res.data.email);
+        goto(3);
+        if (res.data.debug_code) $('#otp-form [name=code]').val(res.data.debug_code);
+      }
+    });
+  });
+
+  $("#otp-form").on("submit", function(e){
+    e.preventDefault();
+    GA.submit($(this), {
+      url: "{% url 'accounts:api_university_signup_verify' %}",
+      busyText: "Creating…"
+    });
+  });
+});
+</script>
+{% endblock %}

@@ -1,0 +1,32 @@
+<!--
+  State and district, as a pair.
+
+  The state list is grouped into States and Union Territories: it is 36 long,
+  and somebody looking for "Delhi" should not have to know which of the two it
+  is to find it in an alphabetical run.
+
+  Districts refill in the browser from a map shipped with the page rather than
+  a request per change. About 30 KB for all 727 of them, on a field a person
+  fills once — cheaper than a round trip, and it works before the account
+  exists, which is when this form is used.
+
+  The server validates the pair regardless: accounts.forms.PlaceMixin refuses
+  "Kerala / Bhopal" whatever the browser posted.
+-->
+<div class="col-md-6">
+  <label class="form-label">State / Union Territory *</label>
+  <select class="form-select" name="state" id="f-state" required>
+    <option value="">Choose…</option>
+    {% for group in state_groups %}
+    <optgroup label="{{ group.label }}">
+      {% for s in group.states %}<option value="{{ s }}">{{ s }}</option>{% endfor %}
+    </optgroup>
+    {% endfor %}
+  </select>
+</div>
+<div class="col-md-6">
+  <label class="form-label">District *</label>
+  <select class="form-select" name="district" id="f-district" required disabled>
+    <option value="">Choose a state first</option>
+  </select>
+</div>

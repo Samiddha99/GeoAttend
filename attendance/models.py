@@ -31,6 +31,19 @@ class AttendanceSession(models.Model):
     )
     subject = models.ForeignKey(Subject, on_delete=models.CASCADE, related_name="sessions")
     batch = models.ForeignKey(Batch, on_delete=models.CASCADE, related_name="sessions")
+    # Which section the class was for. Null means the whole batch — the same
+    # meaning it carries on a TeacherAssignment, and what every session before
+    # sections existed already means.
+    #
+    # **Recorded, not derived.** Sections get renamed, retired and reorganised;
+    # a session is a historical fact about who was in a room on a Tuesday, and
+    # working it out again from today's allocations would answer a different
+    # question every term. `SET_NULL` for the same reason — deleting a section
+    # must not delete a term of attendance, and a session that widens to "the
+    # whole batch" is a truthful, if vaguer, record of what happened.
+    section = models.ForeignKey(
+        "academics.Section", on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="sessions")
 
     # geo-fence centre (teacher's position at generation time)
     latitude = models.DecimalField(max_digits=9, decimal_places=6)

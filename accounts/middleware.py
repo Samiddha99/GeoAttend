@@ -119,6 +119,45 @@ class GuardianChildMiddleware:
         return self.get_response(request)
 
 
+class UniversityFocusMiddleware:
+    """
+    Resolve which institute a university is looking at, once per request.
+
+    Hung on the user object for the same reason `GuardianChildMiddleware` hangs
+    the acting child there: the selectors take a `user`, not a `request`, and
+    every scoped query in the project runs through `institutes_for(user)`.
+    Putting the answer where that function can already see it makes the filter
+    apply to every list, chart and export at once — including ones written
+    later, which is the part that matters. The alternative, adding an
+    `institute` argument to a dozen selectors and every caller, has one chance
+    to be forgotten per call site and fails silently when it is.
+
+    The session stores the *choice*; whether it is still reachable is
+    recomputed here on every request, so an institute that leaves this
+    university's reach stops being focusable on the next click rather than
+    whenever the session happens to expire.
+    """
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        from .scoping import SESSION_INSTITUTE_KEY, institutes_for, set_focus
+
+        user = getattr(request, "user", None)
+        if user is not None and getattr(user, "is_authenticated", False) \
+                and getattr(user, "is_university", False):
+            chosen = request.session.get(SESSION_INSTITUTE_KEY)
+            if chosen and not institutes_for(user, focused=False).filter(
+                    pk=chosen).exists():
+                # Out of reach now — drop it rather than showing an empty
+                # dashboard the user cannot explain or clear.
+                request.session.pop(SESSION_INSTITUTE_KEY, None)
+                chosen = None
+            set_focus(user, chosen)
+        return self.get_response(request)
+
+
 class ActivityTrackingMiddleware:
     """Stamp `last_seen` at most once a minute — cheap presence tracking."""
 

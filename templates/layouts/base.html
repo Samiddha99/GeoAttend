@@ -26,6 +26,17 @@ sidebar.
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+<!--
+  Set before app.js so GA.instituteCol() can decide whether the column exists
+  at all. A university looks across several institutes; everyone else has one,
+  and a column repeating the same name on every row is noise.
+-->
+<script>
+  window.GA_IS_UNIVERSITY = {{ is_university|yesno:"true,false" }};
+  {% if is_university %}
+  window.GA_SWITCH_INSTITUTE_URL = "{% url 'accounts:api_switch_institute' %}";
+  {% endif %}
+</script>
 <script src="{% static 'js/app.js' %}"></script>
 {% if messages %}
 <script>

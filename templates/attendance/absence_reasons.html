@@ -19,6 +19,7 @@ your decision — it does not change their attendance percentage.{% endblock %}
     <span class="input-group-text"><i class="fa-solid fa-magnifying-glass"></i></span>
     <input class="form-control" id="search" placeholder="Student, roll or subject…">
   </div>
+  {% include "partials/institute_filter.html" with id="f-institute" %}
   <select class="form-select form-select-sm" id="f-status" style="max-width:200px">
     <option value="PENDING">Awaiting review</option>
     <option value="APPROVED">Approved</option>
@@ -105,6 +106,7 @@ $(function(){
   // One row is one student's day. The classes they missed that day sit inside
   // it as `items`, each with its own status and its own decision to make.
   const cols = [
+    GA.instituteCol(),
     { key:"student", label:"Student",
       // Searched on the roll and the email too, which the placeholder promises
       // but a bare `student` key could not deliver.

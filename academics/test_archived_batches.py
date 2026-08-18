@@ -292,8 +292,17 @@ class WriteGuardTests(ArchivedBatchBase):
 
         self.archive()
         self.client.force_login(self.hod)
+        # Name, PAN and date of birth are required on this form now. They are
+        # supplied so the request still reaches the guard this test is about —
+        # otherwise it fails at form validation and proves nothing about
+        # archived batches. No PAN verification is patched because the batch
+        # check refuses the request before the gate is reached, which is the
+        # order this asserts.
         response = self.client.post(reverse("academics:api_teacher_invite"), {
             "email": "new@i.edu",
+            "full_name": "New Teacher",
+            "pan_number": "ABCDE1234F",
+            "date_of_birth": "1985-04-12",
             "assignments": json.dumps([{"subject_id": self.dsa.id,
                                         "batch_id": self.doomed.id}]),
         })
@@ -305,14 +314,18 @@ class WriteGuardTests(ArchivedBatchBase):
         from academics.importer import import_students, read_rows
 
         self.archive()
+        # The Department column and an institute-scoped call: the department
+        # stopped being an argument and became a cell, so this row has to name
+        # one to reach the guard it is about.
         header = ("Name,Mobile Number,Email,Batch,Subjects Enrolled,"
-                  "Guardian Mobile,Guardian Name,Roll Number")
+                  "Guardian Mobile,Guardian Name,Roll Number,Department")
         upload = SimpleUploadedFile(
             "r.csv",
-            (header + "\nNew Student,1,new@i.edu,2019-23,DSA,+919812345670,G,R9").encode(),
+            (header + "\nNew Student,1,new@i.edu,2019-23,DSA,+919812345670,G,R9,"
+             + self.dept.code).encode(),
             content_type="text/csv")
         rows, _ = read_rows(upload)
-        job = import_students(rows, self.dept, self.hod, send_invites=False)
+        job = import_students(rows, self.institute, self.hod, send_invites=False)
         self.assertEqual(job.error_count, 1)
         self.assertIn("archived", job.report["rows"][0]["messages"][0])
 

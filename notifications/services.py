@@ -28,6 +28,15 @@ OVERALL, SUBJECT = "OVERALL", "SUBJECT"
 # --------------------------------------------------------------------------- #
 #  Who should hear from us
 # --------------------------------------------------------------------------- #
+def _campaign_institute(user, filters):
+    """The institute a university's alert campaign belongs to."""
+    from accounts.models import Institute
+
+    if filters.institute:
+        return Institute.objects.filter(pk=filters.institute).first()
+    return None
+
+
 def build_recipients(user, filters, threshold, scope=OVERALL, subject=None):
     """
     Students inside `user`'s scope whose attendance is below `threshold`.
@@ -195,8 +204,13 @@ def send_campaign(*, user, filters, threshold, scope, subject, drafts,
     student_wa_on = bool(channels.get("student_whatsapp"))
     whatsapp_on = bool(channels.get("whatsapp"))
 
+    # A university has no institute of its own, so the campaign is filed
+    # against the institute it was focused on when sending. Sending across
+    # every institute at once is refused upstream for exactly this reason:
+    # one campaign row cannot honestly belong to forty colleges.
     campaign = AlertCampaign.objects.create(
-        institute=user.institute,
+        institute=(user.institute if not getattr(user, "is_university", False)
+                   else _campaign_institute(user, filters)),
         created_by=user,
         scope=scope,
         subject=subject,

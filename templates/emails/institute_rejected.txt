@@ -1,0 +1,9 @@
+Hello {{ head.short_name }},
+
+Your registration for {{ institute.name }} was not approved.
+
+Reason given:
+{{ reason }}
+
+If you think this is a mistake, contact the university directly - they can
+approve the registration without you signing up again.

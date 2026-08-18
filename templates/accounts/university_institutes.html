@@ -1,0 +1,460 @@
+{% extends "layouts/app.html" %}
+{% block page_title %}Institutes{% endblock %}
+{% block page_sub %}Every institute you affiliate or invited, and the ones waiting on you.{% endblock %}
+{% block topbar_actions %}
+<button class="btn btn-primary btn-sm" id="btn-invite">
+  <i class="fa-solid fa-plus me-1"></i>Add an institute</button>
+{% endblock %}
+
+{% block content %}
+<ul class="nav nav-tabs mb-3" id="scope-tabs">
+  <li class="nav-item"><button class="nav-link active" data-scope="all">
+    <i class="fa-solid fa-building-columns me-1"></i>All
+    <span class="ga-pill pill-grey ms-1" id="n-all">0</span></button></li>
+  <!--
+    The float the requirement asks for. Amber rather than grey because it is a
+    queue somebody is waiting in, not a statistic.
+  -->
+  <li class="nav-item"><button class="nav-link" data-scope="pending">
+    <i class="fa-solid fa-hourglass-half me-1"></i>Awaiting approval
+    <span class="ga-pill pill-amber ms-1" id="n-pending">0</span></button></li>
+  <li class="nav-item"><button class="nav-link" data-scope="approved">
+    <i class="fa-solid fa-circle-check me-1"></i>Approved
+    <span class="ga-pill pill-green ms-1" id="n-approved">0</span></button></li>
+  <li class="nav-item"><button class="nav-link" data-scope="rejected">
+    <i class="fa-solid fa-circle-xmark me-1"></i>Rejected
+    <span class="ga-pill pill-red ms-1" id="n-rejected">0</span></button></li>
+</ul>
+
+<div class="card mb-3"><div class="card-body py-3 table-toolbar">
+  <div class="input-group input-group-sm" style="max-width:300px">
+    <span class="input-group-text"><i class="fa-solid fa-magnifying-glass"></i></span>
+    <input class="form-control" id="search" placeholder="Name, code or district…">
+  </div>
+  <button class="btn btn-light btn-sm ms-auto" id="btn-refresh">
+    <i class="fa-solid fa-rotate"></i></button>
+</div></div>
+
+<div class="card"><div class="card-body"><div id="tbl"></div></div></div>
+
+<!-- add an institute -->
+<div class="modal fade" id="invite-modal" tabindex="-1">
+  <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
+    <div class="modal-content"><form id="invite-form">{% csrf_token %}
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="fa-solid fa-building-columns me-2 text-primary"></i>
+          Add an institute</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="alert alert-light border fs-13">
+          <i class="fa-solid fa-circle-info text-primary me-2"></i>
+          You set the name, code and where it is. The head fills in the rest —
+          address, phone, website and their own details — when they accept the
+          invitation. They cannot change the state or district you choose here.
+        </div>
+        <div class="row g-3">
+          <div class="col-md-8">
+            <label class="form-label">Institute name *</label>
+            <input class="form-control" name="institute_name" required>
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">Code *</label>
+            <input class="form-control text-uppercase" name="institute_code" required>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Official institute email *</label>
+            <input type="email" class="form-control" name="institute_email" required>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Head of institute email *</label>
+            <input type="email" class="form-control" name="head_email" required>
+            <div class="form-text">The invitation goes here; it becomes their login.</div>
+          </div>
+          {% include "partials/place_picker.html" %}
+        </div>
+
+        <hr class="my-3">
+        <label class="form-label">Discipline(s) *</label>
+        <div class="row g-2">
+          {% for d in disciplines %}
+          <div class="col-md-6">
+            <div class="form-check border rounded-3 p-2 ps-4 mb-0">
+              <input class="form-check-input" type="checkbox" name="disciplines"
+                     value="{{ d.value }}" id="i-{{ d.value }}">
+              <label class="form-check-label fs-13" for="i-{{ d.value }}">{{ d.label }}</label>
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+        <div class="form-text">
+          {% if university.grants_affiliation %}
+          You are recorded as the affiliating body for each discipline you also
+          cover. Any others are marked autonomous.
+          {% else %}
+          You do not grant affiliation, so these are recorded as autonomous.
+          You can still invite and manage the institute.
+          {% endif %}
+        </div>
+        <div class="invalid-feedback d-block" id="invite-err"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+        <button type="submit" class="btn btn-primary">
+          <i class="fa-solid fa-paper-plane me-1"></i>Create &amp; invite</button>
+      </div>
+    </form></div>
+  </div>
+</div>
+
+<!--
+  Correct an institute's record. The other half of the rule in
+  accounts/identity.py: an affiliated institute cannot change its own name or
+  official email, so the university has to be able to.
+-->
+<div class="modal fade" id="edit-modal" tabindex="-1">
+  <div class="modal-dialog modal-lg modal-dialog-centered">
+    <div class="modal-content"><form id="edit-form">{% csrf_token %}
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="fa-solid fa-pen me-2 text-primary"></i>
+          Edit <span id="edit-name"></span></h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="row g-3">
+          <div class="col-md-8">
+            <label class="form-label">Institute name *</label>
+            <input class="form-control" name="name" required>
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">Code *</label>
+            <input class="form-control text-uppercase" name="code" required>
+            <div class="form-text">
+              Appears in exports and in the Institute column. Changing it will
+              not match spreadsheets already downloaded under the old one.
+            </div>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Official institute email *</label>
+            <input type="email" class="form-control" name="email" required>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Head's login email</label>
+            <input type="email" class="form-control" name="head_email">
+            <div class="form-text">
+              What the head signs in with. Changing it does not reset their
+              password or notify them — tell them yourself.
+            </div>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Phone</label>
+            <input class="form-control" name="phone">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Website</label>
+            <input type="url" class="form-control" name="website">
+          </div>
+          <div class="col-12">
+            <label class="form-label">Address</label>
+            <textarea class="form-control" name="address" rows="2"></textarea>
+          </div>
+        </div>
+        <div class="invalid-feedback d-block" id="edit-err"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+        <button type="submit" class="btn btn-primary">Save changes</button>
+      </div>
+    </form>
+
+    <!--
+      Disciplines, in the same modal but outside the form above: they save
+      one action at a time, and folding them into the details form would mean
+      a rename and a delink sharing one Save button with one confirmation
+      between them.
+
+      Delinking is offered per row; adding is a checklist of what is not on
+      file yet. A discipline affiliated to a *different* university shows who
+      holds it and offers nothing — see accounts/affiliations.py.
+    -->
+    <div class="modal-body border-top pt-3">
+      <h6 class="fw-bold mb-2">Disciplines</h6>
+      <div id="edit-disciplines" class="mb-3"></div>
+      <label class="form-label">Add a discipline</label>
+      <div class="row g-2" id="edit-add-disciplines"></div>
+      <div class="d-flex gap-2 mt-3">
+        <button type="button" class="btn btn-primary btn-sm" id="btn-affiliate">
+          <i class="fa-solid fa-link me-1"></i>Add under us</button>
+        <button type="button" class="btn btn-light btn-sm" id="btn-add-autonomous"
+                title="Record it without putting your name to it">
+          <i class="fa-solid fa-plus me-1"></i>Add as autonomous</button>
+      </div>
+      <div class="invalid-feedback d-block" id="disc-err"></div>
+    </div>
+    </div>
+  </div>
+</div>
+
+<!-- reject, with a reason -->
+<div class="modal fade" id="reject-modal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content"><form id="reject-form">{% csrf_token %}
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="fa-solid fa-circle-xmark me-2 text-danger"></i>
+          Reject <span id="reject-name"></span></h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <label class="form-label">Reason *</label>
+        <textarea class="form-control" name="reason" rows="3" required maxlength="1000"
+                  placeholder="e.g. The affiliation certificate is not on file."></textarea>
+        <div class="form-text">
+          This is emailed to the head of the institute word for word, so write
+          something they can act on.
+        </div>
+        <div class="invalid-feedback d-block" id="reject-err"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+        <button type="submit" class="btn btn-danger">Reject</button>
+      </div>
+    </form></div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+{{ districts_json|json_script:"districts-data" }}
+{{ disciplines|json_script:"disciplines-data" }}
+<script>
+$(function(){
+  const DISTRICTS = JSON.parse(document.getElementById("districts-data").textContent);
+  const ALL_DISCIPLINES = JSON.parse(document.getElementById("disciplines-data").textContent);
+  let table = null, rows = [], scope = "all", rejecting = null;
+  const inviteModal = new bootstrap.Modal("#invite-modal");
+  const rejectModal = new bootstrap.Modal("#reject-modal");
+  const editModal = new bootstrap.Modal("#edit-modal");
+  let editing = null;
+
+  $("#f-state").on("change", function(){
+    const list = DISTRICTS[$(this).val()] || [];
+    $("#f-district").prop("disabled", !list.length).html(list.length
+      ? '<option value="">Choose…</option>' +
+        list.map(d => '<option value="'+GA.esc(d)+'">'+GA.esc(d)+'</option>').join("")
+      : '<option value="">Choose a state first</option>');
+  });
+
+  const cols = [
+    { key:"name", label:"Institute", render:(v,r)=>
+      '<div class="fw-600">'+GA.esc(v)+'</div>'+
+      '<small class="text-muted-2">'+GA.esc(r.code)+' · '+GA.esc(r.place || "—")+'</small>' },
+    { key:"affiliations", label:"Disciplines", sortable:false,
+      csv:v=>(v||[]).map(a=>a.discipline_label+" ("+a.university+")").join("; "),
+      render:v=>(v||[]).map(a=>
+        '<span class="ga-pill '+(a.autonomous ? "pill-grey" : "pill-blue")+'" title="'+
+        GA.esc(a.university)+'">'+GA.esc(a.discipline_label)+'</span>').join("")
+        || '<span class="text-muted-2">—</span>' },
+    { key:"head", label:"Head", render:(v,r)=> v
+        ? '<div>'+GA.esc(v)+'</div>'+
+          (r.head_pending ? '<span class="ga-pill pill-amber">invitation not accepted</span>' : '')
+        : '<span class="text-muted-2">—</span>' },
+    { key:"students", label:"Students", className:"text-center" },
+    { key:"status", label:"Status", render:(v,r)=>
+      GA.statusPill(v === "PENDING" ? "PENDING" : v === "APPROVED" ? "ACCEPTED" : "REVOKED") +
+      (v === "REJECTED" && r.rejection_reason
+        ? '<div><small class="text-muted-2 ga-clamp-2" title="'+GA.esc(r.rejection_reason)+'">'+
+          GA.esc(r.rejection_reason)+'</small></div>' : '') },
+    { key:"id", label:"", sortable:false, className:"text-end", render:(v,r)=>
+      '<div class="btn-group btn-group-sm">'+
+      (r.status !== "APPROVED"
+        ? '<button class="btn btn-light text-success approve" data-id="'+v+'" '+
+          'title="Approve"><i class="fa-solid fa-check"></i></button>' : '')+
+      (r.status !== "REJECTED"
+        ? '<button class="btn btn-light text-danger reject" data-id="'+v+'" '+
+          'data-name="'+GA.esc(r.name)+'" title="Reject"><i class="fa-solid fa-xmark"></i></button>' : '')+
+      '<button class="btn btn-light edit" data-id="'+v+'" '+
+      'title="Edit name, official email and head login"><i class="fa-solid fa-pen"></i></button>'+
+      '<button class="btn btn-light focus-it" data-id="'+v+'" '+
+      'title="Open this institute"><i class="fa-solid fa-arrow-right-to-bracket"></i></button>'+
+      '</div>' }
+  ];
+
+  function view(){
+    return scope === "all" ? rows : rows.filter(r => r.status === scope.toUpperCase());
+  }
+
+  function render(){
+    if(!table) table = GA.table("#tbl", { csvName:"institutes", columns:cols,
+      rows:view(), search:"#search", perPage:20,
+      empty:"Nothing here." });
+    else table.setRows(view());
+    bind();
+  }
+
+  function load(){
+    GA.loading("#tbl", {rows:6, cols:6});
+    return GA.get("{% url 'accounts:api_institutes' %}").done(function(res){
+      rows = res.data.rows;
+      const c = res.data.counts;
+      $("#n-all").text(c.all); $("#n-pending").text(c.pending);
+      $("#n-approved").text(c.approved); $("#n-rejected").text(c.rejected);
+      render();
+    });
+  }
+
+  function bind(){
+    $("#tbl").off("click", ".approve").on("click", ".approve", function(){
+      const id = $(this).attr("data-id");
+      GA.confirm({title:"Approve this institute?", variant:"success", icon:"fa-check",
+        body:"Its head will be emailed and can sign in straight away.",
+        confirmText:"Approve"})
+        .done(()=> GA.post("/auth/api/institutes/"+id+"/approve/").done(load));
+    });
+    $("#tbl").off("click", ".reject").on("click", ".reject", function(){
+      rejecting = $(this).attr("data-id");
+      $("#reject-name").text($(this).data("name"));
+      $('#reject-form [name=reason]').val("");
+      $("#reject-err").text("");
+      rejectModal.show();
+    });
+    $("#tbl").off("click", ".edit").on("click", ".edit", function(){
+      const r = rows.find(x => x.id == $(this).attr("data-id"));
+      editing = r.id;
+      $("#edit-name").text(r.name);
+      $('#edit-form [name=code]').val(r.code);
+      $("#edit-err").text("");
+      $('#edit-form [name=name]').val(r.name);
+      $('#edit-form [name=email]').val(r.email);
+      $('#edit-form [name=head_email]').val(r.head_email);
+      $('#edit-form [name=phone]').val(r.phone);
+      $('#edit-form [name=website]').val(r.website || "");
+      $('#edit-form [name=address]').val(r.address || "");
+      renderDisciplines(r);
+      editModal.show();
+    });
+    // Focus this institute, then go where its head would land.
+    $("#tbl").off("click", ".focus-it").on("click", ".focus-it", function(){
+      GA.post("{% url 'accounts:api_switch_institute' %}", {institute: $(this).attr("data-id")})
+        .done(function(){ window.location = "{% url 'dashboard:home' %}"; });
+    });
+  }
+
+  /*
+    One row per discipline the institute already has. Only the ones this
+    university may act on get a Delink or Remove button — the rest say who
+    holds them, because "why is this greyed out" is a support question and a
+    name is the answer.
+  */
+  function renderDisciplines(r){
+    const mine = (r.affiliations || []);
+    $("#disc-err").text("");
+    $("#edit-disciplines").html(mine.length ? mine.map(function(a){
+      const ours = a.autonomous || a.university_id === "{{ university.id }}";
+      return '<div class="d-flex align-items-center gap-2 border rounded-3 p-2 mb-1">'+
+        '<div class="flex-grow-1"><div class="fw-600 fs-13">'+GA.esc(a.discipline_label)+'</div>'+
+        '<small class="'+(a.autonomous ? "text-muted-2" : "")+'">'+
+        (a.autonomous ? "Autonomous" : GA.esc(a.university))+'</small></div>'+
+        (ours && !a.autonomous
+          ? '<button class="btn btn-light btn-sm disc-delink" data-d="'+a.discipline+'" '+
+            'title="The institute becomes autonomous for this">'+
+            '<i class="fa-solid fa-link-slash me-1"></i>Delink</button>' : '')+
+        (ours
+          ? '<button class="btn btn-light btn-sm text-danger disc-remove" data-d="'+a.discipline+'" '+
+            'title="The institute does not teach this at all"><i class="fa-solid fa-trash"></i></button>'
+          : '<span class="ga-pill pill-grey" title="Only '+GA.esc(a.university)+
+            ' can change this"><i class="fa-solid fa-lock"></i></span>')+
+        '</div>';
+    }).join("") : '<div class="text-muted-2 fs-13">Nothing on file.</div>');
+
+    const have = mine.map(a => a.discipline);
+    const left = ALL_DISCIPLINES.filter(d => have.indexOf(d.value) === -1);
+    $("#edit-add-disciplines").html(left.length ? left.map(d =>
+      '<div class="col-md-6"><div class="form-check border rounded-3 p-2 ps-4 mb-0">'+
+      '<input class="form-check-input disc-pick" type="checkbox" value="'+d.value+'" '+
+      'id="ed-'+d.value+'"><label class="form-check-label fs-13" for="ed-'+d.value+'">'+
+      GA.esc(d.label)+'</label></div></div>').join("")
+      : '<div class="col-12 text-muted-2 fs-13">Every discipline is already on file.</div>');
+    $("#btn-affiliate, #btn-add-autonomous").prop("disabled", !left.length);
+  }
+
+  function disciplineAction(action, codes){
+    if (!codes.length) { $("#disc-err").text("Choose at least one discipline."); return; }
+    $("#disc-err").text("");
+    GA.post("/auth/api/institutes/"+editing+"/disciplines/",
+            {action: action, disciplines: codes})
+      .done(function(res){
+        renderDisciplines(res.data.row);
+        rows = rows.map(x => x.id === res.data.row.id ? res.data.row : x);
+        render();
+      })
+      .fail(function(xhr){
+        $("#disc-err").text((xhr.responseJSON || {}).message || "That did not work.");
+      });
+  }
+
+  function picked(){
+    return $(".disc-pick:checked").map(function(){ return this.value; }).get();
+  }
+
+  $("#btn-affiliate").on("click", function(){ disciplineAction("affiliate", picked()); });
+  $("#btn-add-autonomous").on("click", function(){
+    /*
+      Recorded without this university's name on it. A university may legitimately
+      note that an institute runs an autonomous wing without claiming to award it.
+    */
+    disciplineAction("autonomous", picked());
+  });
+  $("#edit-disciplines").on("click", ".disc-delink", function(){
+    disciplineAction("delink", [$(this).attr("data-d")]);
+  });
+  $("#edit-disciplines").on("click", ".disc-remove", function(){
+    const code = $(this).attr("data-d");
+    GA.confirm({title:"Remove this discipline?", variant:"warning",
+      body:"Use Delink instead if the institute still runs the course without you.",
+      confirmText:"Remove"}).done(function(){ disciplineAction("remove", [code]); });
+  });
+
+  $("#edit-form").on("submit", function(e){
+    e.preventDefault();
+    GA.submit($(this), {
+      url: "/auth/api/institutes/" + editing + "/update/",
+      onSuccess: function(){ editModal.hide(); load(); }
+    });
+  });
+
+  $("#scope-tabs").on("click", "[data-scope]", function(){
+    $("#scope-tabs .nav-link").removeClass("active");
+    $(this).addClass("active");
+    scope = $(this).data("scope");
+    render();
+  });
+
+  $("#btn-invite").on("click", function(){
+    $("#invite-form")[0].reset();
+    $("#f-district").prop("disabled", true).html('<option value="">Choose a state first</option>');
+    $("#invite-err").text("");
+    GA.clearErrors($("#invite-form"));
+    inviteModal.show();
+  });
+
+  $("#invite-form").on("submit", function(e){
+    e.preventDefault();
+    GA.submit($(this), {
+      url: "{% url 'accounts:api_institute_invite' %}",
+      onSuccess: function(){ inviteModal.hide(); load(); }
+    });
+  });
+
+  $("#reject-form").on("submit", function(e){
+    e.preventDefault();
+    GA.submit($(this), {
+      url: "/auth/api/institutes/"+rejecting+"/reject/",
+      onSuccess: function(){ rejectModal.hide(); load(); }
+    });
+  });
+
+  $("#btn-refresh").on("click", function(){ GA.spin(this, load()); });
+  load();
+});
+</script>
+{% endblock %}

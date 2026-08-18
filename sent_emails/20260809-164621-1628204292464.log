@@ -1,0 +1,62 @@
+Content-Type: multipart/alternative;
+ boundary="===============6179607188107838546=="
+MIME-Version: 1.0
+Subject: Bengal College is waiting for your approval
+From: Samiddha Chakrabarti <samiddha99@gmail.com>
+To: angra@university.geoattend.local
+Reply-To: samiddha99@gmail.com
+Date: Sun, 09 Aug 2026 11:16:21 -0000
+Message-ID: <178627418153.24940.3616719065176058910@Samiddha>
+unique-message-id: 811ddbf7fdaf425592444395228afb20
+message-group: GeoAttend
+
+--===============6179607188107838546==
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 8bit
+
+Bengal College has registered on GeoAttend and named you as its
+affiliating body. It cannot be used until you approve it.
+
+Barwani, Madhya Pradesh
+bce123@geoattend.ac.in · 7085831361
+
+Sign in and open Institutes -> Awaiting approval to approve or reject it.
+If you reject it, the reason you give is sent to the institute.
+
+https://geoattend.fly.dev/auth/login/
+
+--===============6179607188107838546==
+Content-Type: text/html; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 8bit
+
+<!doctype html><html><body style="margin:0;padding:0;background:#f5f7fb;font-family:'Segoe UI',Arial,sans-serif;color:#0f172a">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#f5f7fb;padding:28px 12px">
+<tr><td align="center">
+  <table width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;background:#fff;border-radius:14px;overflow:hidden;box-shadow:0 6px 24px rgba(15,23,42,.08)">
+    <tr><td style="background:linear-gradient(135deg,#4f46e5,#06b6d4);padding:22px 26px;color:#fff">
+      <div style="font-size:19px;font-weight:700">📍 GeoAttend</div>
+      <div style="font-size:12px;opacity:.85">Geo-verified classroom attendance</div>
+    </td></tr>
+    <tr><td style="padding:26px">
+<p>Hello angra,</p>
+<p><b>Bengal College</b> has registered on GeoAttend and named you as
+  its affiliating body. It cannot be used until you approve it.</p>
+<p>
+  Barwani, Madhya Pradesh<br>
+  bce123@geoattend.ac.in · 7085831361
+</p>
+<p>Sign in and open <b>Institutes → Awaiting approval</b> to approve or reject it.
+  If you reject it, the reason you give is sent to the institute.</p>
+</td></tr>
+    <tr><td style="padding:16px 26px;background:#f8fafc;color:#64748b;font-size:11px;border-top:1px solid #e2e8f0">
+      This is an automated message from GeoAttend. Please do not reply.<br>&copy; 2026 GeoAttend
+    </td></tr>
+  </table>
+</td></tr></table>
+</body></html>
+
+--===============6179607188107838546==--
+
+-------------------------------------------------------------------------------

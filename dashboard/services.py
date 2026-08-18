@@ -29,10 +29,27 @@ PRESENT = ["PRESENT", "MANUAL"]
 def scoped_sessions(user, f=None):
     # `batch__is_active` keeps archived cohorts out of every statistic derived
     # from attendance — see academics.selectors for the rule.
+    #
+    # The department has to be checked too, and separately. Archiving a
+    # department does not touch its batches (deliberately — see
+    # academics/curriculum.effective_state, where state flows down rather than
+    # being copied), so a live batch inside an archived or revoked department
+    # would otherwise keep contributing to every average on the dashboard while
+    # showing as archived on its own screen.
+    from academics.curriculum import live_departments
+    from academics.models import Department
+
     qs = AttendanceSession.objects.exclude(
         status=AttendanceSession.Status.CANCELLED
-    ).filter(batch__is_active=True)
-    if user.is_head:
+    ).filter(
+        batch__is_active=True,
+        subject__department__in=live_departments(Department.objects.all()),
+    )
+    if user.is_university:
+        from accounts.scoping import institutes_for
+
+        qs = qs.filter(subject__department__institute__in=institutes_for(user))
+    elif user.is_head:
         qs = qs.filter(subject__department__institute=user.institute)
     elif user.is_hod:
         qs = qs.filter(subject__department__in=departments_for(user))
@@ -56,6 +73,10 @@ def scoped_sessions(user, f=None):
     if f is None:
         return qs
     qs = qs.filter(session_date__gte=f.start, session_date__lte=f.end)
+    # A university may focus one of its institutes; everyone else already has
+    # exactly one, so this is a no-op for them.
+    if f.institute:
+        qs = qs.filter(subject__department__institute_id=f.institute)
     if f.department:
         qs = qs.filter(subject__department_id=f.department)
     if f.batch:
@@ -66,6 +87,8 @@ def scoped_sessions(user, f=None):
         qs = qs.filter(subject__subject_type=f.subject_type)
     if f.degree:
         qs = qs.filter(subject__degree=f.degree)
+    if f.discipline:
+        qs = qs.filter(subject__department__discipline=f.discipline)
     if f.teacher:
         qs = qs.filter(teacher_id=f.teacher)
     if f.semester:
@@ -77,8 +100,15 @@ def scoped_students(user, f=None):
     qs = students_qs_for(user).select_related("user", "batch", "department")
     if f is None:
         return qs
+    if f.institute:
+        qs = qs.filter(department__institute_id=f.institute)
     if f.department:
         qs = qs.filter(department_id=f.department)
+    if f.discipline:
+        # Unlike the three subject-shaped filters below, a student *is* in a
+        # discipline: it comes from their department, not from what they happen
+        # to be enrolled in. So this is a direct filter, not an enrolment one.
+        qs = qs.filter(department__discipline=f.discipline)
     if f.batch:
         qs = qs.filter(batch_id=f.batch)
     if f.subject:
@@ -274,6 +304,7 @@ def student_report(user, f, limit=3000):
             "batch": student.batch.label,
             "batch_id": student.batch_id,
             "department": student.department.name,
+            "institute": student.department.institute.name,
             "held": slots_total,
             "attended": present_total,
             "manual": manual_total,
@@ -302,6 +333,7 @@ def subject_report(user, f):
             "degree": s.subject.degree,
             "semester": s.subject.semester,
             "department": s.subject.department.name,
+            "institute": s.subject.department.institute.name,
             "batch": s.batch.label,
             "batch_id": s.batch_id,
             "classes": 0,
@@ -420,7 +452,7 @@ def student_daily_trend(user, f, student):
 # --------------------------------------------------------------------------- #
 #  5. Comparisons
 # --------------------------------------------------------------------------- #
-def _group_percentage(sessions, group_field, label_map):
+def _group_percentage(sessions, group_field, label_map, institute_map=None):
     rows = defaultdict(lambda: {"classes": 0, "expected": 0, "present": 0,
                                 "manual": 0})
     for s in sessions.order_by().values(group_field, "expected_count").annotate(n=Count("id")):
@@ -454,6 +486,11 @@ def _group_percentage(sessions, group_field, label_map):
             "present": v["present"],
             "manual": v["manual"],
             "manual_share": pct(v["manual"], v["present"]),
+            # Blank for everyone but a university, whose Institute column is
+            # the only thing that reads it. A rollup row spans one institute by
+            # construction — a batch belongs to one department, which belongs
+            # to one institute — so there is always exactly one right answer.
+            "institute": (institute_map or {}).get(key, ""),
         })
     out.sort(key=lambda r: -r["percentage"])
     return out
@@ -461,13 +498,19 @@ def _group_percentage(sessions, group_field, label_map):
 
 def batch_comparison(user, f):
     sessions = scoped_sessions(user, f)
-    labels = {b.id: b.label for b in Batch.objects.all()}
-    return _group_percentage(sessions, "batch_id", labels)
+    batches = Batch.objects.select_related("department__institute")
+    labels, institutes = {}, {}
+    for b in batches:
+        labels[b.id] = b.label
+        institutes[b.id] = b.department.institute.name
+    return _group_percentage(sessions, "batch_id", labels, institutes)
 
 
 def department_comparison(user, f):
     sessions = scoped_sessions(user, f)
-    labels = {d.id: d.name for d in Department.objects.all()}
+    departments = Department.objects.select_related("institute")
+    labels = {d.id: d.name for d in departments}
+    institutes = {d.id: d.institute.name for d in departments}
     rows = defaultdict(lambda: {"classes": 0, "expected": 0, "present": 0,
                                 "manual": 0})
     for s in sessions.order_by().values(
@@ -495,18 +538,22 @@ def department_comparison(user, f):
         "id": k, "label": labels.get(k, "—"), "classes": v["classes"],
         "percentage": pct(v["present"], v["expected"]), "present": v["present"],
         "manual": v["manual"], "manual_share": pct(v["manual"], v["present"]),
+        "institute": institutes.get(k, ""),
     } for k, v in rows.items()]
     out.sort(key=lambda r: -r["percentage"])
     return out
 
 
 def teacher_activity(user, f):
-    sessions = scoped_sessions(user, f).select_related("teacher")
+    sessions = scoped_sessions(user, f).select_related(
+        "teacher", "teacher__institute")
     rows = defaultdict(lambda: {"classes": 0, "expected": 0, "present": 0,
-                                "manual": 0, "name": ""})
+                                "manual": 0, "name": "", "institute": ""})
     for s in sessions:
         r = rows[s.teacher_id]
         r["name"] = s.teacher.full_name or s.teacher.email
+        r["institute"] = (s.teacher.institute.name
+                          if s.teacher.institute_id else "")
         r["classes"] += 1
         r["expected"] += s.expected_count
     for m in (
@@ -525,6 +572,7 @@ def teacher_activity(user, f):
         "percentage": pct(v["present"], v["expected"]),
         "present": v["present"], "manual": v["manual"],
         "manual_share": pct(v["manual"], v["present"]),
+        "institute": v["institute"],
     } for k, v in rows.items()]
     out.sort(key=lambda r: -r["classes"])
     return out

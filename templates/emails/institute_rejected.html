@@ -1,0 +1,8 @@
+{% extends "emails/base_email.html" %}
+{% block content %}
+<p>Hello {{ head.short_name }},</p>
+<p>Your registration for <b>{{ institute.name }}</b> was not approved.</p>
+<p><b>Reason given:</b><br>{{ reason }}</p>
+<p>If you think this is a mistake, contact the university directly — they can
+  approve the registration without you signing up again.</p>
+{% endblock %}

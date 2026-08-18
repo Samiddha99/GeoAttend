@@ -1,0 +1,12 @@
+{% extends "emails/base_email.html" %}
+{% block content %}
+<p>Hello {{ university.short_name|default:university.name }},</p>
+<p><b>{{ institute.name }}</b> has registered on {{ SITE_NAME }} and named you as
+  its affiliating body. It cannot be used until you approve it.</p>
+<p>
+  {{ institute.district }}{% if institute.district and institute.state %}, {% endif %}{{ institute.state }}<br>
+  {{ institute.email }}{% if institute.phone %} · {{ institute.phone }}{% endif %}
+</p>
+<p>Sign in and open <b>Institutes → Awaiting approval</b> to approve or reject it.
+  If you reject it, the reason you give is sent to the institute.</p>
+{% endblock %}

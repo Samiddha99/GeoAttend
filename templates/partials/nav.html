@@ -3,6 +3,48 @@
   <i class="fa-solid fa-gauge-high"></i> Dashboard
 </a>
 
+{% if user.is_university %}
+  <div class="nav-label">{{ user.university.short_name|default:user.university.name }}</div>
+  <a href="{% url 'accounts:institutes' %}" class="{% if '/auth/institutes' in request.path %}active{% endif %}">
+    <i class="fa-solid fa-building-columns"></i> Institutes
+    {% if pending_institutes %}<span class="ga-nav-badge"
+      title="{{ pending_institutes }} awaiting approval">{{ pending_institutes }}</span>{% endif %}</a>
+  <div class="nav-label">Catalogue</div>
+  <!--
+    The university's own departments — what it publishes for institutes to
+    adopt, not any college's live data. Labelled "Catalogue" so the two never
+    read as the same list; see academics/catalogue.py.
+  -->
+  <a href="{% url 'academics:catalogue_departments' %}" class="{% if '/manage/catalogue/departments' in request.path %}active{% endif %}">
+    <i class="fa-solid fa-building-columns"></i> Departments</a>
+  <a href="{% url 'academics:catalogue_batches' %}" class="{% if '/manage/catalogue/batches' in request.path %}active{% endif %}">
+    <i class="fa-solid fa-layer-group"></i> Batches</a>
+  <a href="{% url 'academics:catalogue_subjects' %}" class="{% if '/manage/catalogue/subjects' in request.path %}active{% endif %}">
+    <i class="fa-solid fa-book"></i> Subjects</a>
+  <div class="nav-label">Institutes' data</div>
+  <!--
+    Below the catalogue and labelled apart from it: these are the colleges'
+    own rows, which a university looks at but does not write.
+
+    Subjects and Batches are deliberately absent. A university's own syllabus
+    and cohorts live under Catalogue above; the colleges' copies are the same
+    rows seen from the other side, and two entries a click apart both saying
+    "Subjects" invited the reading that one of them was editable here. It is
+    not — the endpoints refuse it.
+
+    The two pages still exist and a university still passes their role check,
+    but nothing links to them any more: they are reachable by typing the URL
+    and no other way. Left routable rather than closed off because the read is
+    harmless and closing a route is a separate decision from unlisting it.
+  -->
+  <a href="{% url 'academics:teachers' %}" class="{% if '/manage/teachers' in request.path %}active{% endif %}">
+    <i class="fa-solid fa-chalkboard-user"></i> Teachers</a>
+  <a href="{% url 'academics:students' %}" class="{% if '/manage/students' in request.path %}active{% endif %}">
+    <i class="fa-solid fa-user-graduate"></i> Students</a>
+  <a href="{% url 'notifications:templates' %}" class="{% if '/alerts/templates' in request.path %}active{% endif %}">
+    <i class="fa-brands fa-whatsapp"></i> WhatsApp templates</a>
+{% endif %}
+
 {% if user.is_head %}
   <div class="nav-label">Institute</div>
   <a href="{% url 'academics:departments' %}" class="{% if '/manage/departments' in request.path %}active{% endif %}">

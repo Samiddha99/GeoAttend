@@ -1,0 +1,7 @@
+{% extends "emails/base_email.html" %}
+{% block content %}
+<p>Hello {{ head.short_name }},</p>
+<p><b>{{ institute.name }}</b> has been approved. You can sign in now and start
+  setting up departments, batches and subjects.</p>
+<p><a href="{{ SITE_URL }}/auth/login/">Sign in to {{ SITE_NAME }}</a></p>
+{% endblock %}

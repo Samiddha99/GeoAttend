@@ -11,7 +11,25 @@
         <label class="form-label mb-1">To</label>
         <input type="date" class="form-control form-control-sm" name="end" id="f-end" value="{{ default_end }}">
       </div>
-      {% if user.is_head %}
+      <!--
+        The shared control, so this bar and every other toolbar in the app show
+        the same choice. Deliberately without a `name`: it is not serialised
+        into the filter payload like its neighbours, because it stores the
+        choice for the session and reloads instead. Giving it a name as well
+        would mean two mechanisms for one setting, and the Reset button below
+        would clear one of them and not the other.
+      -->
+      {% if is_university %}
+      <div class="col-6 col-md-2">
+        <label class="form-label mb-1">Institute</label>
+        {% include "partials/institute_filter.html" with id="f-institute" width="100%" %}
+      </div>
+      {% endif %}
+      <div class="col-6 col-md-2">
+        <label class="form-label mb-1">Discipline</label>
+        {% include "partials/discipline_filter.html" with id="f-discipline" name="discipline" width="100%" %}
+      </div>
+      {% if user.is_head or is_university %}
       <div class="col-6 col-md-2">
         <label class="form-label mb-1">Department</label>
         <select class="form-select form-select-sm" name="department" id="f-department">

@@ -2,21 +2,43 @@
 {% block page_title %}Subjects{% endblock %}
 {% block page_sub %}Papers offered by your department. Add them before importing students.{% endblock %}
 {% block topbar_actions %}
+{% if can_add %}
 <button class="btn btn-primary btn-sm" id="btn-new"><i class="fa-solid fa-plus me-1"></i>New subject</button>
+{% endif %}
 {% endblock %}
 
 {% block content %}
+{% if not can_add and not is_university %}
+<div class="alert alert-warning fs-13 d-flex gap-2">
+  <i class="fa-solid fa-lock mt-1"></i>
+  <div>
+    Every department you run was adopted from your affiliating university, so
+    it publishes the syllabus for them. You can add subjects once you have a
+    department of your own — an autonomous discipline, or one you created
+    before affiliating.
+  </div>
+</div>
+{% endif %}
+
 <div class="card mb-3"><div class="card-body py-3 table-toolbar">
   <div class="input-group input-group-sm" style="max-width:300px">
     <span class="input-group-text"><i class="fa-solid fa-magnifying-glass"></i></span>
     <input class="form-control" id="search" placeholder="Search code or name…">
   </div>
-  {% if user.is_head %}
+  {% include "partials/institute_filter.html" with id="f-institute" %}
+  <!--
+    Offered to everyone now, not only a head. A HoD or teacher whose scope
+    already spans one department gets a one-option dropdown, which is harmless;
+    a university spanning twelve institutes could not filter at all, which was
+    not.
+  -->
   <select class="form-select form-select-sm" id="dept-filter" style="max-width:240px">
     <option value="">All departments</option>
-    {% for d in departments %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}
+    {% for d in filter_departments %}
+    <option value="{{ d.id }}">{{ d.name }}{% if not d.is_active %} (archived){% endif %}</option>
+    {% endfor %}
   </select>
-  {% endif %}
+  {% include "partials/discipline_filter.html" with id="f-discipline-filter" %}
   <select class="form-select form-select-sm" id="sem-filter" style="max-width:170px">
     <option value="">All semesters</option>
     {% for i in "12345678"|make_list %}<option value="{{ i }}">Semester {{ i }}</option>{% endfor %}
@@ -39,8 +61,19 @@
       {% if user.is_head %}
       <div class="mb-3"><label class="form-label">Department *</label>
         <select class="form-select" name="department" required>
-          {% for d in departments %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}
-        </select></div>
+          {% for d in departments %}<option value="{{ d.id }}">{{ d.name }} ({{ d.code }})</option>{% endfor %}
+        </select>
+        <!--
+          Editable on edit as well as on create. Before, the department was
+          fixed once set, which left a subject stranded in a revoked department
+          with no way out. Moving it here honours the Active checkbox below:
+          ticked lands it active, unticked lands it archived.
+        -->
+        <div class="form-text">
+          Moving this subject to another department applies the Active setting
+          below on arrival.
+        </div>
+      </div>
       {% endif %}
       <div class="row g-3">
         <div class="col-md-4 mb-0"><label class="form-label">Code *</label>
@@ -91,23 +124,52 @@ $(function(){
     { key:"name", label:"Subject", render:v=>'<span class="fw-600">'+GA.esc(v)+'</span>' },
     GA.degreeCol(),GA.subjectTypeCol(),
     { key:"department", label:"Department" },
+    /* `always`: the requirement asks for these on Subjects for every user. */
+    GA.instituteCol(null, {always:true}),
+    GA.disciplineCol(),
+    /*
+      Who owns this row. Only ever filled for a subject an affiliating
+      university set, so an institute's own subjects show a dash rather than a
+      column of "mine, mine, mine".
+    */
+    { key:"owner", label:"Set by", render:v=> v
+        ? '<span class="ga-pill pill-violet" title="Set by your affiliating university — read-only here">'+
+          '<i class="fa-solid fa-lock me-1"></i>'+GA.esc(v)+'</span>'
+        : '<span class="text-muted-2">This institute</span>' },
     { key:"semester", label:"Sem", className:"text-center" },
     { key:"credits", label:"Credits", className:"text-center" },
     { key:"teacher_count", label:"Teachers", className:"text-center" },
     { key:"student_count", label:"Enrolled", className:"text-center" },
-    { key:"is_active", label:"Status", render:v=>GA.statusPill(v ? "active":"REVOKED") },
+    /*
+      Revoked outranks archived. A subject whose discipline the institute no
+      longer offers is not the same thing as one that was switched off, and
+      showing both as "Revoked" — which the old expression did for anything
+      inactive — hid the difference at the moment it mattered.
+    */
+    /* One shared cell: Revoked leads, status follows. See GA.statusCol. */
+    GA.statusCol(),
+    /*
+      Read-only rows get an explanation instead of disabled buttons. A greyed
+      pencil says "not now"; the institute needs to know it is never, and why.
+      The server refuses these regardless — this is the courtesy, not the lock.
+    */
     { key:"id", label:"", sortable:false, className:"text-end", render:(v,r)=>
-      '<div class="btn-group btn-group-sm">'+
-      '<button class="btn btn-light edit" data-id="'+v+'"><i class="fa-solid fa-pen"></i></button>'+
-      '<button class="btn btn-light text-danger del" data-id="'+v+'" data-name="'+GA.esc(r.code)+'"><i class="fa-solid fa-trash"></i></button></div>' }
+      r.read_only
+        ? '<span class="text-muted-2 fs-13" title="Ask '+GA.esc(r.owner)+' to amend it">'+
+          '<i class="fa-solid fa-lock me-1"></i>Read-only</span>'
+        : '<div class="btn-group btn-group-sm">'+
+          '<button class="btn btn-light edit" data-id="'+v+'"><i class="fa-solid fa-pen"></i></button>'+
+          '<button class="btn btn-light text-danger del" data-id="'+v+'" data-name="'+GA.esc(r.code)+'"><i class="fa-solid fa-trash"></i></button></div>' }
   ];
 
   function applyFilters(){
     const d = $("#dept-filter").val(), s = $("#sem-filter").val(),
-          t = $("#type-filter").val(), g = $("#degree-filter").val();
+          t = $("#type-filter").val(), g = $("#degree-filter").val(),
+          disc = $("#f-discipline-filter").val();
     table.setRows(rows.filter(r =>
       (!d || r.department_id == d) && (!s || r.semester == s) &&
-      (!t || r.subject_type === t) && (!g || r.degree === g)));
+      (!t || r.subject_type === t) && (!g || r.degree === g) &&
+      (!disc || r.discipline === disc)));
     bind();
   }
 
@@ -147,7 +209,8 @@ $(function(){
     GA.clearErrors($("#form")); modal.show();
   });
   $("#btn-refresh").on("click", function(){ GA.spin(this, load()); });
-  $("#dept-filter, #sem-filter, #type-filter, #degree-filter").on("change", applyFilters);
+  $("#dept-filter, #sem-filter, #type-filter, #degree-filter, #f-discipline-filter")
+    .on("change", applyFilters);
 
   $("#form").on("submit", function(e){
     e.preventDefault();

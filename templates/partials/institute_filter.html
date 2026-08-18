@@ -1,0 +1,31 @@
+<!--
+  The Institute filter, for a university looking across several of them.
+
+  Renders nothing for anyone else: everybody but a university has exactly one
+  institute, and a dropdown with one option is furniture.
+
+  Include it with an `id` argument at the front of any toolbar — students.html
+  is a live example. (Written in prose on purpose: an include tag spelled out
+  here would be a real tag, not an illustration, and this file would include
+  itself forever. HTML comments hide things from the browser, not from Django.)
+
+  **It is not a per-page filter.** Changing it stores the choice for the whole
+  session and reloads, so the rest of the application — every list, every
+  chart, every export — is about that institute until it is changed back. That
+  is why the control looks the same and reads the same on every screen: it is
+  one setting shown in many places, not fifteen filters that happen to share a
+  name. `university_institutes` comes from the site context processor, so no
+  view has to remember to supply it.
+-->
+{% if is_university %}
+<select class="form-select form-select-sm ga-institute-filter"
+        id="{{ id|default:'f-institute' }}"
+        {% if name %}name="{{ name }}"{% endif %}
+        style="max-width:{{ width|default:'210px' }}"
+        title="Show one institute, or all of them">
+  <option value="">All institutes</option>
+  {% for i in university_institutes %}
+  <option value="{{ i.id }}"{% if i.current %} selected{% endif %}>{{ i.name }}</option>
+  {% endfor %}
+</select>
+{% endif %}

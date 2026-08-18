@@ -1,0 +1,6 @@
+Hello {{ head.short_name }},
+
+{{ institute.name }} has been approved. You can sign in now and start setting
+up departments, batches and subjects.
+
+{{ SITE_URL }}/auth/login/

@@ -1,0 +1,20 @@
+{% if lifted %}Suspension lifted: {{ teacher.get_full_name }}{% else %}Teacher suspended: {{ teacher.get_full_name }}{% endif %}
+
+{% if lifted %}{{ university }} has lifted the suspension on {{ teacher.get_full_name }} ({{ teacher.email }}).
+
+They can sign in to {{ SITE_NAME }} again. Their classes, assignments and attendance records are exactly as they left them — nothing was deleted while they were suspended.{% else %}{{ university }} has suspended {{ teacher.get_full_name }} ({{ teacher.email }}) with immediate effect.
+
+They cannot sign in to {{ SITE_NAME }} until the suspension is lifted. Their classes, assignments and attendance records are untouched and will be waiting if it is.{% endif %}
+{% if department %}
+Department: {{ department.name }} ({{ department.code }}){% endif %}{% if institute %}
+Institute: {{ institute.name }} ({{ institute.code }}){% endif %}
+Date: {{ when|date:"j F Y, H:i" }}
+{% if reason %}
+Reason given:
+{{ reason }}
+{% endif %}
+This message went to {{ teacher.get_full_name }}, their head of department and
+the head of the institute.
+
+{% if not lifted %}Only {{ university }} can lift this suspension. The institute cannot.
+{% endif %}{{ SITE_URL }}

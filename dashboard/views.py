@@ -8,7 +8,13 @@ from django.utils import timezone
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.decorators.http import require_GET
 
-from academics.selectors import batches_for, departments_for, subjects_for, teachers_for
+from academics.selectors import (
+    batches_for,
+    departments_for,
+    semester_options,
+    subjects_for,
+    teachers_for,
+)
 from accounts.guardians import acting_profile
 from attendance.models import AttendanceSession
 from core.decorators import guardian_readonly, role_required
@@ -17,10 +23,13 @@ from core.http import fail, ok
 from .filters import ReportFilters
 from . import services as svc
 
-HEAD, HOD, TEACHER, STUDENT, GUARDIAN = (
-    "HEAD", "HOD", "TEACHER", "STUDENT", "GUARDIAN")
+HEAD, HOD, TEACHER, STUDENT, GUARDIAN, UNIVERSITY = (
+    "HEAD", "HOD", "TEACHER", "STUDENT", "GUARDIAN", "UNIVERSITY")
 
 TEMPLATE_BY_ROLE = {
+    # A university reads the same analytics screen a head does; what differs is
+    # the scope behind it and the institute filter on top, not the layout.
+    UNIVERSITY: "dashboard/analytics.html",
     HEAD: "dashboard/analytics.html",
     HOD: "dashboard/analytics.html",
     TEACHER: "dashboard/analytics.html",
@@ -43,13 +52,11 @@ def home(request):
         "departments": departments_for(request.user),
         "batches": batches_for(request.user).select_related("department"),
         "subjects": subjects_for(request.user),
-        # Only the semesters that actually exist in scope — a fixed 1..12 list
-        # would offer filters that return nothing.
-        "semesters": sorted(
-            subjects_for(request.user)
-            .exclude(semester=None)
-            .values_list("semester", flat=True).distinct()),
-        "teachers": teachers_for(request.user) if request.user.role in (HEAD, HOD) else [],
+        # One helper rather than the query inline, because the query has a trap
+        # in it — see academics.selectors.semester_options.
+        "semesters": semester_options(request.user),
+        "teachers": (teachers_for(request.user)
+                     if request.user.role in (HEAD, HOD, UNIVERSITY) else []),
         "threshold": settings.ATTENDANCE["LOW_ATTENDANCE_THRESHOLD"],
         "default_start": f"{timezone.localdate().year}-01-01",
         "default_end": timezone.localdate().isoformat(),
@@ -71,25 +78,23 @@ def home(request):
     return render(request, template, context)
 
 
-@role_required(HEAD, HOD, TEACHER)
+@role_required(HEAD, HOD, TEACHER, UNIVERSITY)
 @ensure_csrf_cookie
 def reports_page(request):
     return render(request, "dashboard/reports.html", {
         "departments": departments_for(request.user),
         "batches": batches_for(request.user).select_related("department"),
         "subjects": subjects_for(request.user),
-        "semesters": sorted(
-            subjects_for(request.user)
-            .exclude(semester=None)
-            .values_list("semester", flat=True).distinct()),
-        "teachers": teachers_for(request.user) if request.user.role in (HEAD, HOD) else [],
+        "semesters": semester_options(request.user),
+        "teachers": (teachers_for(request.user)
+                     if request.user.role in (HEAD, HOD, UNIVERSITY) else []),
         "threshold": settings.ATTENDANCE["LOW_ATTENDANCE_THRESHOLD"],
         "default_start": f"{timezone.localdate().year}-01-01",
         "default_end": timezone.localdate().isoformat(),
     })
 
 
-@role_required(HEAD, HOD, TEACHER)
+@role_required(HEAD, HOD, TEACHER, UNIVERSITY)
 @ensure_csrf_cookie
 def student_detail_page(request, pk):
     student = get_object_or_404(svc.scoped_students(request.user), pk=pk)
@@ -117,7 +122,7 @@ def api_trend(request):
     return ok(svc.daily_trend(request.user, f))
 
 
-@role_required(HEAD, HOD, TEACHER)
+@role_required(HEAD, HOD, TEACHER, UNIVERSITY)
 @require_GET
 def api_students_report(request):
     f = ReportFilters.from_request(request)
@@ -125,7 +130,7 @@ def api_students_report(request):
     return ok({"rows": rows, "count": len(rows)})
 
 
-@role_required(HEAD, HOD, TEACHER)
+@role_required(HEAD, HOD, TEACHER, UNIVERSITY)
 @require_GET
 def api_subjects_report(request):
     f = ReportFilters.from_request(request)
@@ -133,28 +138,28 @@ def api_subjects_report(request):
     return ok({"rows": rows, "count": len(rows)})
 
 
-@role_required(HEAD, HOD, TEACHER)
+@role_required(HEAD, HOD, TEACHER, UNIVERSITY)
 @require_GET
 def api_batches_report(request):
     f = ReportFilters.from_request(request)
     return ok({"rows": svc.batch_comparison(request.user, f)})
 
 
-@role_required(HEAD)
+@role_required(HEAD, UNIVERSITY)
 @require_GET
 def api_departments_report(request):
     f = ReportFilters.from_request(request)
     return ok({"rows": svc.department_comparison(request.user, f)})
 
 
-@role_required(HEAD, HOD)
+@role_required(HEAD, HOD, UNIVERSITY)
 @require_GET
 def api_teachers_report(request):
     f = ReportFilters.from_request(request)
     return ok({"rows": svc.teacher_activity(request.user, f)})
 
 
-@role_required(HEAD, HOD, TEACHER)
+@role_required(HEAD, HOD, TEACHER, UNIVERSITY)
 @require_GET
 def api_distribution(request):
     f = ReportFilters.from_request(request)
@@ -164,7 +169,7 @@ def api_distribution(request):
     })
 
 
-@role_required(HEAD, HOD, TEACHER)
+@role_required(HEAD, HOD, TEACHER, UNIVERSITY)
 @require_GET
 def api_low_attendance(request):
     f = ReportFilters.from_request(request)
@@ -226,7 +231,7 @@ def _csv(filename, header, rows):
     return response
 
 
-@role_required(HEAD, HOD, TEACHER)
+@role_required(HEAD, HOD, TEACHER, UNIVERSITY)
 @require_GET
 def export_students(request):
     f = ReportFilters.from_request(request)
@@ -243,7 +248,7 @@ def export_students(request):
     )
 
 
-@role_required(HEAD, HOD, TEACHER)
+@role_required(HEAD, HOD, TEACHER, UNIVERSITY)
 @require_GET
 def export_subjects(request):
     f = ReportFilters.from_request(request)

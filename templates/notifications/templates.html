@@ -34,6 +34,7 @@
       <span class="input-group-text"><i class="fa-solid fa-magnifying-glass"></i></span>
       <input class="form-control" id="search" placeholder="Search templates…">
     </div>
+    {% include "partials/institute_filter.html" with id="f-institute" %}
     <select class="form-select form-select-sm" id="f-audience" style="max-width:220px">
       <option value="">Students and guardians</option>
       <option value="STUDENT">To students</option>
@@ -148,6 +149,7 @@ $(function(){
   }
 
   const cols = [
+    GA.instituteCol(),
     { key:"name", label:"Template", render:(v,r)=>
       '<div><div class="fw-600">'+GA.esc(v)+'</div>'+
       '<small class="text-muted-2">'+GA.esc(r.twilio_name)+'</small></div>' },

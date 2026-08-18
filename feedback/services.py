@@ -234,7 +234,13 @@ def visible_forms(user):
     """Forms this member of staff may look at."""
     qs = (FeedbackForm.objects
           .select_related("session", "session__subject", "session__teacher",
-                          "session__batch", "session__subject__department"))
+                          "session__batch", "session__subject__department",
+                          "session__subject__department__institute"))
+    if user.is_university:
+        from accounts.scoping import institutes_for
+
+        return qs.filter(
+            session__subject__department__institute__in=institutes_for(user))
     if user.is_head:
         return qs.filter(session__subject__department__institute=user.institute)
     if user.is_hod:
@@ -380,6 +386,7 @@ def staff_form_row(form, *, responses=None):
         "batch_id": session.batch_id,
         "department": session.subject.department.name,
         "department_id": session.subject.department_id,
+        "institute": session.subject.department.institute.name,
         "sent": form.sent_count,
         "responses": stats["responses"],
         "response_rate": (round(stats["responses"] * 100.0 / form.sent_count, 1)
@@ -495,6 +502,9 @@ def filtered_forms(user, params):
     degree = (params.get("degree") or "").strip().upper()
     if degree in Degree.values:
         qs = qs.filter(session__subject__degree=degree)
+    institute = clean_object_id(params.get("institute"))
+    if institute:
+        qs = qs.filter(session__subject__department__institute_id=institute)
 
     # A single date and a range are the same filter with the ends collapsed.
     on = parse_date(params.get("date"))

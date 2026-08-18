@@ -27,6 +27,12 @@ from accounts.models import Institute, User
 HEADER = ("Name,Mobile Number,Email,Batch,Subjects Enrolled,"
           "Guardian Mobile,Guardian Name,Roll Number")
 
+#: Appended by the helpers below. The department stopped being an argument to
+#: `import_students` and became a column in the sheet, so a row that creates a
+#: student has to name one. Added in the helper rather than written into twenty
+#: row literals, none of which is *about* the department.
+DEPARTMENT_COLUMN = "CSE"
+
 
 def _subject(code, name, subject_type, department_id="D1", semester=3,
              degree="BACHELOR"):
@@ -277,7 +283,17 @@ class SubjectTypeFilterParsingTests(SimpleTestCase):
         self.assertIn("subject_type", self._parse(subject_type="OTHER").as_dict())
 
 
-def make_csv(rows, header=HEADER):
+def make_csv(rows, header=HEADER, department=DEPARTMENT_COLUMN):
+    """
+    A roster upload, with a Department column appended to every row.
+
+    Uniformly, including on sheets that only update existing students — naming
+    the department they are already in changes nothing, and one rule beats a
+    per-test judgement about whether a row happens to create somebody.
+    """
+    if department is not None:
+        header = header + ",Department"
+        rows = [f"{r},{department}" for r in rows]
     body = "\n".join([header] + rows)
     return SimpleUploadedFile("roster.csv", body.encode(), content_type="text/csv")
 
@@ -306,7 +322,7 @@ class ImporterTests(TestCase):
         ])
         rows, err = read_rows(upload)
         self.assertIsNone(err)
-        job = import_students(rows, self.dept, self.hod, send_invites=False)
+        job = import_students(rows, self.institute, self.hod, send_invites=False)
         self.assertEqual(job.created_count, 2)
         self.assertEqual(job.error_count, 0)
         self.assertTrue(Batch.objects.filter(department=self.dept, label="2022-26").exists())
@@ -328,7 +344,7 @@ class ImporterTests(TestCase):
             "Typo Student,1,typo@i.edu,2022-27,\"DSA\",+919812345670,G,X9",
         ])
         rows, err = read_rows(upload)
-        job = import_students(rows, self.dept, self.hod, send_invites=False)
+        job = import_students(rows, self.institute, self.hod, send_invites=False)
         self.assertEqual(job.error_count, 1)
         self.assertEqual(job.created_count, 0)
         self.assertIn("does not exist", job.report["rows"][0]["messages"][0])
@@ -341,7 +357,7 @@ class ImporterTests(TestCase):
             "New Cohort,1,cohort@i.edu,2023-27,\"DSA\",+919812345670,G,X8",
         ])
         rows, err = read_rows(upload)
-        job = import_students(rows, self.dept, self.hod, send_invites=False,
+        job = import_students(rows, self.institute, self.hod, send_invites=False,
                               create_missing_batches=True)
         self.assertEqual(job.error_count, 0)
         self.assertTrue(Batch.objects.filter(label="2023-27").exists())
@@ -358,14 +374,14 @@ class ImporterTests(TestCase):
             "Ananya Sharma,1,ananya@i.edu,2022-26,\"DSA\",+919812345670,G,C1",
         ]))
         with patch("academics.importer.send_invitation") as sent:
-            import_students(rows, self.dept, self.hod, send_invites=True)
+            import_students(rows, self.institute, self.hod, send_invites=True)
         self.assertEqual(sent.call_count, 1)          # new account
 
         rows, _ = read_rows(make_csv([
             "Ananya Sharma,1,ananya@i.edu,2022-26,\"DSA\",+919899999999,G,C1",
         ]))
         with patch("academics.importer.send_invitation") as sent:
-            job = import_students(rows, self.dept, self.hod, send_invites=True)
+            job = import_students(rows, self.institute, self.hod, send_invites=True)
         self.assertEqual(sent.call_count, 0)          # same person, updated
         self.assertEqual(job.updated_count, 1)
         self.assertFalse(job.report["rows"][0]["invited"])
@@ -376,13 +392,13 @@ class ImporterTests(TestCase):
         rows, _ = read_rows(make_csv([
             "Ananya Sharma,1,old@i.edu,2022-26,\"DSA\",+919812345670,G,C1",
         ]))
-        import_students(rows, self.dept, self.hod, send_invites=False)
+        import_students(rows, self.institute, self.hod, send_invites=False)
 
         rows, _ = read_rows(make_csv([
             "Ananya Sharma,1,new@i.edu,2022-26,\"DSA\",+919812345670,G,C1",
         ]))
         with patch("academics.importer.send_invitation") as sent:
-            job = import_students(rows, self.dept, self.hod, send_invites=True)
+            job = import_students(rows, self.institute, self.hod, send_invites=True)
         self.assertEqual(sent.call_count, 1)
         self.assertTrue(job.report["rows"][0]["invited"])
 
@@ -393,7 +409,7 @@ class ImporterTests(TestCase):
             "Ananya Sharma,1,ananya@i.edu,2022-26,\"DSA\",+919812345670,G,C1",
         ]))
         with patch("academics.importer.send_invitation") as sent:
-            import_students(rows, self.dept, self.hod, send_invites=False)
+            import_students(rows, self.institute, self.hod, send_invites=False)
         self.assertEqual(sent.call_count, 0)
 
     def test_unknown_subject_and_bad_batch_are_reported(self):
@@ -404,7 +420,7 @@ class ImporterTests(TestCase):
         ])
         rows, err = read_rows(upload)
         self.assertIsNone(err)
-        job = import_students(rows, self.dept, self.hod, send_invites=False)
+        job = import_students(rows, self.institute, self.hod, send_invites=False)
         self.assertEqual(job.error_count, 3)
         self.assertEqual(job.created_count, 0)
         messages = " ".join(m for r in job.report["rows"] for m in r["messages"])
@@ -431,7 +447,7 @@ class ImporterTests(TestCase):
         )
         rows, err = read_rows(upload)
         self.assertIsNone(err)                     # header alone is acceptable now
-        job = import_students(rows, self.dept, self.hod, send_invites=False)
+        job = import_students(rows, self.institute, self.hod, send_invites=False)
         self.assertEqual(job.error_count, 1)
         self.assertIn("guardian mobile",
                       " ".join(job.report["rows"][0]["messages"]))
@@ -444,7 +460,7 @@ class ImporterTests(TestCase):
             "Good,1,good@i.edu,2022-26,\"DSA\",98765 43210,G,R3",
         ])
         rows, _ = read_rows(upload)
-        job = import_students(rows, self.dept, self.hod, send_invites=False)
+        job = import_students(rows, self.institute, self.hod, send_invites=False)
         self.assertEqual(job.error_count, 2)
         self.assertEqual(job.created_count, 1)
         messages = " ".join(m for r in job.report["rows"] for m in r["messages"])
@@ -458,10 +474,10 @@ class ImporterTests(TestCase):
     def test_reimport_updates_instead_of_duplicating(self):
         upload = make_csv(["A,1,a@i.edu,2022-26,\"DSA\",+919812345670,G,R1"])
         rows, _ = read_rows(upload)
-        import_students(rows, self.dept, self.hod, send_invites=False)
+        import_students(rows, self.institute, self.hod, send_invites=False)
         upload2 = make_csv(["A,1,a@i.edu,2022-26,\"DSA, DBMS\",+919812345699,G,R1"])
         rows2, _ = read_rows(upload2)
-        job = import_students(rows2, self.dept, self.hod, send_invites=False)
+        job = import_students(rows2, self.institute, self.hod, send_invites=False)
         self.assertEqual(StudentProfile.objects.count(), 1)
         self.assertEqual(job.error_count, 0)
         self.assertEqual(
@@ -597,12 +613,18 @@ class RosterUpsertTests(TestCase):
         ])
         self.ana = StudentProfile.objects.get(user__email="ana@i.edu")
 
-    def _import(self, rows, header=None):
-        body = "\n".join([header or self.HEADER] + rows)
+    def _import(self, rows, header=None, department=DEPARTMENT_COLUMN):
+        """Same Department column the module helper appends — see `make_csv`."""
+        header = header or self.HEADER
+        if department is not None:
+            header = header + ",Department"
+            rows = [f"{r},{department}" for r in rows]
+        body = "\n".join([header] + rows)
         upload = SimpleUploadedFile("r.csv", body.encode(), content_type="text/csv")
         parsed, error = read_rows(upload)
         self.assertIsNone(error, error)
-        return import_students(parsed, self.dept, self.hod, send_invites=False)
+        return import_students(parsed, self.institute, self.hod,
+                               send_invites=False)
 
     # ----------------------------------------------------------------- split
     def test_both_rolls_are_stored_separately(self):

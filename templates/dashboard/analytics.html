@@ -160,6 +160,7 @@ $(function(){
 
     jobs.push(GA.get("{% url 'dashboard:api_subjects_report' %}", f, {quiet:true}).done(function(res){
       GA.table("#tbl-subjects", { perPage:8, rows:res.data.rows, empty:"No classes conducted in this range.", columns:[
+        GA.instituteCol(),
         { key:"code", label:"Code", render:v=>'<span class="ga-pill pill-violet">'+GA.esc(v)+'</span>' },
         { key:"name", label:"Subject", render:v=>'<span class="fw-600">'+GA.esc(v)+'</span>' },
         GA.degreeCol(),GA.subjectTypeCol(),
@@ -178,6 +179,7 @@ $(function(){
     jobs.push(GA.get("{% url 'dashboard:api_low_attendance' %}", $.extend({threshold:{{ threshold }}}, f), {quiet:true})
       .done(function(res){
         GA.table("#tbl-low", { perPage:8, rows:res.data.rows, empty:"Nobody is below the threshold. 🎉", columns:[
+          GA.instituteCol(),
           { key:"name", label:"Student", render:(v,r)=>'<div class="d-flex align-items-center gap-2">'+GA.avatar(v)+
             '<div><div class="fw-600">'+GA.esc(v)+'</div><small class="text-muted-2">'+GA.esc(r.batch)+' · '+GA.esc(r.roll||r.email)+'</small></div></div>' },
           { key:"attended", label:"Att / Held", className:"text-center", render:(v,r)=> v+" / "+r.held },

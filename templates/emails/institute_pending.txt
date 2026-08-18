@@ -1,0 +1,10 @@
+{{ institute.name }} has registered on {{ SITE_NAME }} and named you as its
+affiliating body. It cannot be used until you approve it.
+
+{{ institute.district }}{% if institute.district and institute.state %}, {% endif %}{{ institute.state }}
+{{ institute.email }}{% if institute.phone %} · {{ institute.phone }}{% endif %}
+
+Sign in and open Institutes -> Awaiting approval to approve or reject it.
+If you reject it, the reason you give is sent to the institute.
+
+{{ SITE_URL }}/auth/login/

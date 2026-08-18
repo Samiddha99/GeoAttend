@@ -170,6 +170,21 @@ a{ text-decoration:none; }
 .pill-grey{ background:#f1f5f9; color:#475569; }
 .pill-violet{ background:#ede9fe; color:#5b21b6; }
 
+/*
+  The one pill that is a button. It has to keep the pill's shape exactly —
+  a <button> brings its own border, background and font — while looking
+  clickable, because the reason and date behind it are the substance of the
+  suspension and nobody will click a label that reads as decoration.
+*/
+button.ga-pill{
+  border:0; font-family:inherit; cursor:pointer;
+  transition:filter .12s ease, box-shadow .12s ease;
+}
+button.ga-pill:hover{ filter:brightness(.95); box-shadow:0 0 0 3px rgba(239,68,68,.15); }
+button.ga-pill:focus-visible{ outline:2px solid var(--ga-primary); outline-offset:2px; }
+/* A dotted underline, the long-standing convention for "there is more here". */
+button.ga-suspend-info{ text-decoration:underline dotted; text-underline-offset:2px; }
+
 .ga-bar{ height:6px; border-radius:99px; background:#eef2f7; overflow:hidden; min-width:70px; }
 .ga-bar > span{ display:block; height:100%; border-radius:99px; }
 

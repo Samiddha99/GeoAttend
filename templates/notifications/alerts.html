@@ -83,6 +83,10 @@
             <input type="date" class="form-control form-control-sm" id="f-start" value="{{ default_start }}"></div>
           <div class="col-6"><label class="form-label">To</label>
             <input type="date" class="form-control form-control-sm" id="f-end" value="{{ default_end }}"></div>
+          {% if is_university %}
+          <div class="col-12"><label class="form-label">Institute</label>
+            {% include "partials/institute_filter.html" with id="f-institute" width="100%" %}</div>
+          {% endif %}
           {% if user.is_head %}
           <div class="col-12"><label class="form-label">Department</label>
             <select class="form-select form-select-sm" id="f-department">
@@ -442,6 +446,7 @@ $(function(){
         { key:"student_id", label:"", sortable:false, width:"34px", render:v=>
           '<input type="checkbox" class="form-check-input pick" value="' + v + '"' +
           (selected.has(v) ? " checked" : "") + ">" },
+        GA.instituteCol(),
         { key:"name", label:"Student", render:(v,r)=>
           '<div class="d-flex align-items-center gap-2">' + GA.avatar(v) +
           '<div><div class="fw-600">' + GA.esc(v) + "</div><small class=\"text-muted-2\">" +

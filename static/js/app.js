@@ -150,7 +150,37 @@ window.GA = (function ($) {
   function clearErrors($form) {
     $form.find(".is-invalid").removeClass("is-invalid");
     $form.find(".invalid-feedback.ga-dyn").remove();
+    /*
+      The ad-hoc message boxes several modals keep — `<div class="invalid-feedback
+      d-block" id="err">` and friends. They are written with .text() and are
+      empty in the markup by construction, so emptying them is always right and
+      never eats a static label. `.ga-dyn` ones are removed outright above.
+
+      Left behind, they were the visible half of a worse bug: one modal is
+      reused for every row, so an error raised against one teacher greeted
+      whoever was opened next.
+    */
+    $form.find(".invalid-feedback.d-block").not(".ga-dyn").empty();
   }
+
+  /*
+    Every modal starts clean.
+
+    A modal in this app is a single element reused for every row — open it for
+    teacher A, get a PAN error, close it, open it for teacher B, and A's error
+    is still sitting there against B's name. Clearing at each call site meant
+    remembering at each call site, and the edit path did not.
+
+    Bound once, delegated, on the event Bootstrap fires just before a modal
+    becomes visible — so it covers modals added to the page later, and modals
+    on pages written after this.
+  */
+  $(document).on("show.bs.modal", ".modal", function () {
+    const $modal = $(this);
+    $modal.find("form").each(function () { clearErrors($(this)); });
+    // Some modals keep their message box outside the <form>.
+    clearErrors($modal);
+  });
 
   function showErrors($form, errors, message) {
     clearErrors($form);
@@ -220,6 +250,41 @@ window.GA = (function ($) {
     return d.promise();
   }
 
+  /**
+   * A read-only dialog: a heading, some HTML, one button.
+   *
+   * The twin of `confirm` above, minus the decision. Built on demand and
+   * removed on close for the same reason: a modal that only exists while it is
+   * open cannot be absent from the page when a script reaches for it.
+   *
+   * `body` is inserted as HTML, so callers escape their own values — the
+   * reason text below is deliberately shown with line breaks preserved, which
+   * a plain-text insert would flatten.
+   */
+  function info(opts) {
+    const o = $.extend({
+      title: "", body: "", closeText: "Close",
+      variant: "primary", icon: "fa-circle-info"
+    }, opts || {});
+    const id = "ga-info-" + Date.now();
+    const $m = $(
+      '<div class="modal fade" id="' + id + '" tabindex="-1">' +
+      '<div class="modal-dialog modal-dialog-centered">' +
+      '<div class="modal-content">' +
+      '<div class="modal-header"><h5 class="modal-title">' +
+      '<i class="fa-solid ' + o.icon + ' me-2 text-' + o.variant + '"></i>' +
+      o.title + "</h5>" +
+      '<button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>' +
+      '<div class="modal-body">' + o.body + "</div>" +
+      '<div class="modal-footer"><button class="btn btn-light" data-bs-dismiss="modal">' +
+      o.closeText + "</button></div>" +
+      "</div></div></div>").appendTo("body");
+    const modal = new bootstrap.Modal($m[0]);
+    $m.on("hidden.bs.modal", function () { $m.remove(); });
+    modal.show();
+    return $m;
+  }
+
   /* -------------------------------------------------------------- Format */
   const esc = (s) => $("<div>").text(s === null || s === undefined ? "" : s).html();
 
@@ -286,6 +351,17 @@ window.GA = (function ($) {
       PENDING: ["pill-amber", "fa-hourglass-half", "Pending"],
       ACCEPTED: ["pill-green", "fa-circle-check", "Accepted"],
       REVOKED: ["pill-red", "fa-ban", "Revoked"],
+      // Barred by the affiliating university. Its own key rather than a
+      // variant of ARCHIVED, because the two are undone by different people
+      // and a pill that conflated them would send somebody to the wrong
+      // office. See accounts/suspension.py.
+      SUSPENDED: ["pill-red", "fa-user-lock", "Suspended"],
+      ACTIVE: ["pill-green", "fa-circle-check", "Active"],
+      INVITED: ["pill-amber", "fa-envelope", "Invited"],
+      // A row inside an archived department. Distinct from REVOKED, whose
+      // department has lost its discipline entirely — see
+      // academics/curriculum.effective_state.
+      ARCHIVED: ["pill-grey", "fa-box-archive", "Archived"],
       EXPIRED: ["pill-grey", "fa-clock", "Expired"],
       PRESENT: ["pill-green", "fa-check", "Present"],
       MANUAL: ["pill-violet", "fa-user-pen", "Manual"],
@@ -406,7 +482,10 @@ window.GA = (function ($) {
       perPage: config.perPage || 15,
       query: ""
     };
-    const cols = config.columns || [];
+    // Nulls are dropped rather than rejected, so a column list can splice in
+    // a conditional column — GA.instituteCol() returns null for anyone who is
+    // not a university — without every screen wrapping it in a ternary.
+    const cols = (config.columns || []).filter(Boolean);
 
     function valueOf(row, col) {
       return col.value ? col.value(row) : row[col.key];
@@ -1274,6 +1353,112 @@ window.GA = (function ($) {
    * A function rather than a shared object: GA.table stores state on the
    * column, so handing the same object to two tables makes them interfere.
    */
+  /**
+   * The Institute column, for a university looking across several of them.
+   *
+   * Returns null for everyone else, so a column list can splice it in
+   * unconditionally and `GA.table` will skip it — the alternative is a
+   * conditional around every column list on every screen.
+   */
+  /*
+    The Discipline a row sits in, inherited from its department.
+
+    Shown to everyone, unlike the Institute column below: an institute with an
+    engineering wing and a pharmacy wing needs to tell them apart on its own
+    screens, and whether a row is affiliated or autonomous follows from this.
+  */
+  /*
+    The status cell every table shares.
+
+    Two independent facts — see core/enums.py — so two things to say. The
+    revoked flag leads, because it is the one that explains the row; the status
+    follows in the tooltip so nothing is lost. Everywhere else it is just the
+    status.
+  */
+  function statusCell(row) {
+    var pill = statusPill(row.status);
+    /*
+      Suspension leads, and unlike every other pill it is clickable: the reason
+      and the date are the whole substance of it, and a red word on its own
+      tells the head of department nothing they can act on. The data travels on
+      the element so the handler needs no lookup into the table's row array —
+      which also means it keeps working after a re-render.
+    */
+    if (row.suspended) {
+      return '<button type="button" class="ga-pill pill-red ga-suspend-info" '
+           + 'title="Click for the reason and date" '
+           + 'data-reason="' + esc(row.suspension_reason || "") + '" '
+           + 'data-when="' + esc(row.suspended_at || "") + '" '
+           + 'data-by="' + esc(row.suspended_by || "") + '" '
+           + 'data-who="' + esc(row.full_name || row.email || "") + '">'
+           + '<i class="fa-solid fa-user-lock me-1"></i>Suspended</button>';
+    }
+    if (!row.revoked) return pill;
+    var own = STATUS_LABELS[row.status] || row.status || "";
+    return '<span class="ga-pill pill-red" title="'
+         + esc("Its discipline is no longer on the institute's record"
+               + (own ? " — otherwise " + own.toLowerCase() : ""))
+         + '"><i class="fa-solid fa-ban me-1"></i>Revoked</span>';
+  }
+
+  var STATUS_LABELS = {
+    ACTIVE: "Active", INVITED: "Invited", ARCHIVED: "Archived",
+    active: "Active", invited: "Invited"
+  };
+
+  function statusCol(key) {
+    return {
+      key: key || "status",
+      label: "Status",
+      csv: function (v, row) {
+        if (row.suspended) {
+          return "Suspended" + (row.suspended_at ? " (" + row.suspended_at + ")" : "")
+               + (row.suspension_reason ? ": " + row.suspension_reason : "");
+        }
+        return row.revoked ? "Revoked" : (STATUS_LABELS[v] || v || "");
+      },
+      render: function (v, row) { return statusCell(row); }
+    };
+  }
+
+  function disciplineCol(key) {
+    return {
+      key: key || "discipline_label",
+      label: "Discipline",
+      render: function (v) {
+        return v ? '<span class="ga-pill pill-grey">' + esc(v) + "</span>"
+                 : '<span class="text-muted-2">—</span>';
+      }
+    };
+  }
+
+  function instituteCol(key, options) {
+    /*
+      `always` is for the four tables the requirement names — Subjects,
+      Batches, Teachers, Students — where the column is wanted for every kind
+      of user. Everywhere else it stays university-only, because a column
+      repeating one institute name down every row of every screen is noise.
+    */
+    if (!window.GA_IS_UNIVERSITY && !(options && options.always)) return null;
+    return {
+      key: key || "institute",
+      label: "Institute",
+      render: function (v, row) {
+        if (!v) return '<span class="text-muted-2">—</span>';
+        /*
+          Rows that carry a separate `institute_name` are showing the code, so
+          the full name goes in the tooltip — a code is unambiguous and short,
+          which is what a column repeated down a dense table needs, but it is
+          only useful if the long form is one hover away.
+        */
+        var full = row && row.institute_name;
+        return '<span class="ga-pill pill-blue"'
+             + (full && full !== v ? ' title="' + esc(full) + '"' : "")
+             + ">" + esc(v) + "</span>";
+      }
+    };
+  }
+
   function degreeCol(key) {
     return {
       key: key || "degree",
@@ -1474,11 +1659,66 @@ window.GA = (function ($) {
       post($menu.attr("data-switch-url"), { student: $(this).attr("data-student") })
         .done(function (res) { window.location = res.data.redirect; });
     });
+
+    /*
+      Institute filter, for a university. Delegated and handled here rather
+      than on each page: the control appears on a dozen screens whose reload
+      routines are all different (some refetch a table, some redraw charts,
+      some do both), and the one thing they agree on is that the whole page is
+      now about a different institute.
+
+      So it stores the choice and reloads. Slower than refetching one table,
+      and correct on every screen including the ones added next — which is the
+      trade this control wants, since it is changed rarely and changes
+      everything. Handled in one place, no page can forget to wire it up.
+    */
+    $(document).on("change", ".ga-institute-filter", function () {
+      var $sel = $(this);
+      var url = window.GA_SWITCH_INSTITUTE_URL;
+      if (!url) return;
+      $sel.prop("disabled", true);
+      post(url, { institute: $sel.val() })
+        .done(function () { window.location.reload(); })
+        .fail(function () { $sel.prop("disabled", false); });
+    });
+  });
+
+  /*
+    Delegated at document level on purpose. Every table that renders a status
+    column gets this for free, and it keeps working across the re-renders that
+    filtering and refreshing cause — a handler bound to the buttons themselves
+    would be thrown away with them.
+  */
+  $(document).on("click", ".ga-suspend-info", function () {
+    const $b = $(this);
+    const reason = $b.attr("data-reason") || "";
+    const when = $b.attr("data-when") || "";
+    const by = $b.attr("data-by") || "";
+    const who = $b.attr("data-who") || "This account";
+    info({
+      title: "Suspended", variant: "danger", icon: "fa-user-lock",
+      body:
+        '<p class="fs-13 text-muted-2 mb-3"><b>' + esc(who) + '</b> cannot sign in' +
+        (by ? " — suspended by <b>" + esc(by) + "</b>" : "") +
+        (when ? " on <b>" + esc(when) + "</b>" : "") + ".</p>" +
+        (reason
+          ? '<div style="background:#fef2f2;border-left:3px solid #ef4444;' +
+            'padding:12px 16px;border-radius:6px">' +
+            '<div class="fs-12 text-muted-2 mb-1">Reason given</div>' +
+            /* White-space preserved: the reason is typed as prose and is
+               quoted word for word in the email, so it should read the same
+               in both places. */
+            '<div class="fs-13" style="white-space:pre-wrap">' + esc(reason) + "</div></div>"
+          : '<div class="fs-13 text-muted-2">No reason was recorded.</div>') +
+        '<p class="fs-12 text-muted-2 mt-3 mb-0">' +
+        "Classes, subject allocations and attendance records are untouched. " +
+        (by ? "Only " + esc(by) + " can lift this." : "") + "</p>"
+    });
   });
 
   return {
     csrf, toast, overlay, btnBusy, request, get, post, submit, showErrors, clearErrors,
-    confirm, table, chart, charts, palette, location: location_, deviceHash, countdown,
+    confirm, info, table, chart, charts, palette, location: location_, deviceHash, countdown,
     esc, pctPill, bar, statusPill, avatar, phone, mmss, copy, query,
     manualNote, presentCell, barWithManual,
     loading, done, chartIsEmpty, spin, absenceReason, absenceCell,
@@ -1487,6 +1727,8 @@ window.GA = (function ($) {
     stars, feedbackBadge, reviewBadge, downloadCsv, csvText,
     subjectType, subjectTypeLabel, subjectTypeCol, subjectOptions,
     narrowSubjectSelect, SUBJECT_TYPES,
-    degree, degreeLabel, degreeCol, DEGREES
+    degree, degreeLabel, degreeCol, DEGREES, instituteCol, disciplineCol,
+    statusCol, statusCell, STATUS_LABELS
   };
+
 })(jQuery);

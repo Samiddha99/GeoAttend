@@ -1,0 +1,57 @@
+Content-Type: multipart/alternative;
+ boundary="===============2630480903736137866=="
+MIME-Version: 1.0
+Subject: GeoAttend verification code: 006404
+From: Samiddha Chakrabarti <samiddha99@gmail.com>
+To: bce12322@geoattend.edu
+Reply-To: samiddha99@gmail.com
+Date: Sun, 09 Aug 2026 11:15:52 -0000
+Message-ID: <178627415264.24940.12721018994474862980@Samiddha>
+unique-message-id: ccae612d21db49c3b0438d7a992d2ffb
+message-group: OTP
+
+--===============2630480903736137866==
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+
+GeoAttend verification code
+
+Use this code to finish creating your institute account:
+
+    006404
+
+It expires in 10 minutes. If you did not request it, ignore this email.
+
+--===============2630480903736137866==
+Content-Type: text/html; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 8bit
+
+<!doctype html><html><body style="margin:0;padding:0;background:#f5f7fb;font-family:'Segoe UI',Arial,sans-serif;color:#0f172a">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#f5f7fb;padding:28px 12px">
+<tr><td align="center">
+  <table width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;background:#fff;border-radius:14px;overflow:hidden;box-shadow:0 6px 24px rgba(15,23,42,.08)">
+    <tr><td style="background:linear-gradient(135deg,#4f46e5,#06b6d4);padding:22px 26px;color:#fff">
+      <div style="font-size:19px;font-weight:700">📍 GeoAttend</div>
+      <div style="font-size:12px;opacity:.85">Geo-verified classroom attendance</div>
+    </td></tr>
+    <tr><td style="padding:26px">
+<h2 style="margin:0 0 8px;font-size:19px">Your verification code</h2>
+<p style="color:#475569;font-size:14px;margin:0 0 18px">Use this code to finish creating your institute account.</p>
+<div style="text-align:center;margin:22px 0">
+  <div style="display:inline-block;background:#eef2ff;color:#4f46e5;font-size:30px;font-weight:800;
+              letter-spacing:9px;padding:14px 24px;border-radius:12px">006404</div>
+</div>
+<p style="color:#64748b;font-size:13px">This code expires in <b>10 minutes</b>. If you did not request it, you can ignore this email.</p>
+</td></tr>
+    <tr><td style="padding:16px 26px;background:#f8fafc;color:#64748b;font-size:11px;border-top:1px solid #e2e8f0">
+      This is an automated message from GeoAttend. Please do not reply.<br>&copy; 2026 GeoAttend
+    </td></tr>
+  </table>
+</td></tr></table>
+</body></html>
+
+--===============2630480903736137866==--
+
+-------------------------------------------------------------------------------

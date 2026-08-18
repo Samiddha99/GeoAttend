@@ -1,0 +1,53 @@
+{% extends "emails/base_email.html" %}{% block content %}
+<h2 style="margin:0 0 8px;font-size:19px">
+  {% if lifted %}Suspension lifted{% else %}Teacher suspended{% endif %}
+</h2>
+
+<p style="color:#475569;font-size:14px">
+  {% if lifted %}
+  <b>{{ university }}</b> has lifted the suspension on
+  <b>{{ teacher.get_full_name }}</b> ({{ teacher.email }}). They can sign in to
+  {{ SITE_NAME }} again.
+  {% else %}
+  <b>{{ university }}</b> has suspended <b>{{ teacher.get_full_name }}</b>
+  ({{ teacher.email }}) with immediate effect. They cannot sign in to
+  {{ SITE_NAME }} until the suspension is lifted.
+  {% endif %}
+</p>
+
+<table style="width:100%;font-size:13px;color:#475569;border-collapse:collapse;margin:16px 0">
+  {% if department %}<tr>
+    <td style="padding:4px 0;width:110px;color:#94a3b8">Department</td>
+    <td style="padding:4px 0"><b>{{ department.name }}</b> ({{ department.code }})</td>
+  </tr>{% endif %}
+  {% if institute %}<tr>
+    <td style="padding:4px 0;color:#94a3b8">Institute</td>
+    <td style="padding:4px 0"><b>{{ institute.name }}</b> ({{ institute.code }})</td>
+  </tr>{% endif %}
+  <tr>
+    <td style="padding:4px 0;color:#94a3b8">Date</td>
+    <td style="padding:4px 0">{{ when|date:"j F Y, H:i" }}</td>
+  </tr>
+</table>
+
+{% if reason %}
+<!-- Quoted verbatim. Paraphrasing a sanction is how an appeal ends up being
+     about the paraphrase rather than about what happened. -->
+<div style="background:#fef2f2;border-left:3px solid #ef4444;padding:12px 16px;border-radius:6px;margin:16px 0">
+  <div style="font-size:12px;color:#94a3b8;margin-bottom:4px">Reason given</div>
+  <div style="font-size:14px;color:#7f1d1d;white-space:pre-wrap">{{ reason }}</div>
+</div>
+{% endif %}
+
+<p style="color:#475569;font-size:13px">
+  Classes, subject assignments and attendance records are
+  <b>untouched</b>{% if not lifted %} and will be waiting if the suspension is
+  lifted{% endif %}. Nothing was deleted.
+</p>
+
+<p style="color:#94a3b8;font-size:12px;margin-top:20px">
+  This message went to {{ teacher.get_full_name }}, their head of department
+  and the head of the institute.{% if not lifted %}
+  Only {{ university }} can lift this suspension — the institute cannot.{% endif %}
+</p>
+{% endblock %}

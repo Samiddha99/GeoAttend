@@ -6,6 +6,7 @@
     return GA.query({
       start: $("#f-start").val(),
       end: $("#f-end").val(),
+      institute: $("#f-institute").val(),
       department: $("#f-department").val(),
       batch: $("#f-batch").val(),
       subject: $("#f-subject").val(),
@@ -27,7 +28,7 @@
     });
     $("#f-reset").on("click", function () {
       $("#filter-form")[0].reset();
-      $("#f-department, #f-batch, #f-subject, #f-subject-type, #f-degree, #f-semester, #f-teacher").val("");
+      $("#f-institute, #f-department, #f-batch, #f-subject, #f-subject-type, #f-degree, #f-semester, #f-teacher").val("");
       $("#f-subject option, #f-subject optgroup").show();   // undo any narrowing
       $(".ga-chip.quick").removeClass("sel").filter('[data-range="year"]').addClass("sel");
       GA.spin(this, onApply());
@@ -78,7 +79,7 @@
       narrowSubjects();
       onApply();
     });
-    $("#f-batch, #f-subject, #f-teacher").on("change", onApply);
+    $("#f-batch, #f-subject, #f-teacher, #f-institute").on("change", onApply);
 
     $(".ga-chip.quick").on("click", function () {
       $(".ga-chip.quick").removeClass("sel");

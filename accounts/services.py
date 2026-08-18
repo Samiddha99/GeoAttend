@@ -7,14 +7,34 @@ from django.db import transaction
 from django.utils import timezone
 
 from .emails import send_invitation, send_welcome
-from .models import ActivityLog, Institute, Invitation
+from .institute_approval import request_institute_approval
+from .models import (
+    ActivityLog,
+    Institute,
+    InstituteAffiliation,
+    Invitation,
+    University,
+    UniversityDiscipline,
+)
 
 User = get_user_model()
 
 
 @transaction.atomic
 def create_institute_and_head(payload):
-    """Called only after the signup OTP has been verified."""
+    """
+    Called only after the signup OTP has been verified.
+
+    The institute's status is decided here rather than defaulted: an institute
+    that named an affiliating body needs that body's approval, and one that is
+    autonomous in every discipline has nobody left to ask. Getting this wrong
+    in either direction is serious — too strict locks out a legitimate head,
+    too lax lets anyone claim to be affiliated to a university that never
+    agreed.
+    """
+    affiliations = payload.get("affiliations") or {}
+    needs_approval = any(university_id for university_id in affiliations.values())
+
     institute = Institute.objects.create(
         name=payload["institute_name"],
         code=payload["institute_code"],
@@ -22,7 +42,15 @@ def create_institute_and_head(payload):
         phone=payload.get("phone", ""),
         website=payload.get("website", ""),
         address=payload.get("address", ""),
+        state=payload.get("state", ""),
+        district=payload.get("district", ""),
+        status=(Institute.Status.PENDING if needs_approval
+                else Institute.Status.APPROVED),
     )
+    for discipline, university_id in affiliations.items():
+        InstituteAffiliation.objects.create(
+            institute=institute, discipline=discipline,
+            university_id=university_id)
     head = User.objects.create_user(
         email=payload["head_email"],
         password=payload["password"],
@@ -35,8 +63,112 @@ def create_institute_and_head(payload):
         is_staff=True,
     )
     ActivityLog.log(actor=head, action="INSTITUTE_CREATED", detail=institute.name)
-    send_welcome(head)
+    if needs_approval:
+        # No welcome yet — the head cannot sign in until a university says so,
+        # and a "welcome, you're all set" email would be a lie.
+        request_institute_approval(institute)
+    else:
+        send_welcome(head)
     return institute, head
+
+
+@transaction.atomic
+def create_university_and_admin(payload):
+    """
+    Register a university, or claim one of the seeded rows.
+
+    Claiming reuses the existing row rather than creating a second: the seeded
+    list exists so that "Anna University" is one account with all its
+    institutes, not two accounts that cannot see each other's.
+    """
+    existing = payload.get("existing_university")
+    fields = dict(
+        name=payload["university_name"],
+        short_name=payload.get("short_name", ""),
+        code=payload["university_code"],
+        email=payload["university_email"],
+        phone=payload.get("phone", ""),
+        website=payload.get("website", ""),
+        address=payload.get("address", ""),
+        state=payload.get("state", ""),
+        district=payload.get("district", ""),
+        grants_affiliation=bool(payload.get("grants_affiliation")),
+        claimed_at=timezone.now(),
+    )
+    if existing is not None:
+        for key, value in fields.items():
+            setattr(existing, key, value)
+        existing.save()
+        university = existing
+    else:
+        university = University.objects.create(**fields)
+
+    # Replace rather than merge: the disciplines chosen at signup are what this
+    # university says it covers now, and a seeded row may list one it dropped.
+    UniversityDiscipline.objects.filter(university=university).delete()
+    UniversityDiscipline.objects.bulk_create([
+        UniversityDiscipline(university=university, discipline=d)
+        for d in payload["disciplines"]])
+
+    admin = User.objects.create_user(
+        email=payload["admin_email"],
+        password=payload["password"],
+        full_name=payload["admin_name"],
+        phone=payload.get("admin_phone", ""),
+        role=User.Role.UNIVERSITY,
+        university=university,
+        email_verified=True,
+        registration_completed=True,
+    )
+    ActivityLog.log(actor=admin, action="UNIVERSITY_CREATED", detail=university.name)
+    send_welcome(admin)
+    return university, admin
+
+
+@transaction.atomic
+def invite_institute(*, university, name, code, email, head_email,
+                     state, district, affiliations, invited_by=None):
+    """
+    A university creates an institute and invites its head.
+
+    The university fixes what it is entitled to fix — the institute's identity
+    and where it is — and the head fills in the rest when they accept. That
+    split is the whole point: an institute the university placed in a district
+    should not be able to move itself somewhere else, but its own address,
+    phone and website are its own business.
+
+    Approved on creation, whatever the affiliation. A university inviting an
+    institute *is* the approval; asking it to then approve its own invitation
+    would be a queue with one item that it put there itself.
+
+    Works whether or not the university grants affiliation — a university may
+    invite an institute it does not affiliate, and that institute simply has no
+    affiliation rows pointing at it.
+    """
+    institute = Institute.objects.create(
+        name=name, code=code, email=email,
+        state=state, district=district,
+        status=Institute.Status.APPROVED,
+        invited_by=university,
+    )
+    for discipline, university_id in (affiliations or {}).items():
+        InstituteAffiliation.objects.create(
+            institute=institute, discipline=discipline,
+            university_id=university_id)
+
+    user, invitation, _created = invite_user(
+        email=head_email,
+        role=User.Role.HEAD,
+        institute=institute,
+        invited_by=invited_by,
+        extra_lines=[
+            f"{university.short_name or university.name} has registered "
+            f"{institute.name} on {settings.SITE_NAME} and invited you to run it.",
+        ],
+    )
+    ActivityLog.log(actor=invited_by, action="INSTITUTE_INVITED",
+                    detail=f"{institute.name} by {university.name}")
+    return institute, user, invitation
 
 
 @transaction.atomic

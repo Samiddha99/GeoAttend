@@ -1,0 +1,52 @@
+Content-Type: multipart/alternative;
+ boundary="===============2243745327934243947=="
+MIME-Version: 1.0
+Subject: Welcome to GeoAttend
+From: Samiddha Chakrabarti <samiddha99@gmail.com>
+To: teacher1.ce@demo.edu
+Reply-To: samiddha99@gmail.com
+Date: Tue, 18 Aug 2026 08:54:53 -0000
+Message-ID: <178704329337.25868.7856447635792902674@Samiddha>
+unique-message-id: ad8da2c559a64e0e86c0c18ae24f7d6a
+message-group: WELCOME
+
+--===============2243745327934243947==
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+
+Welcome, Test!
+
+Your Teacher account is active. Sign in with teacher1.ce@demo.edu:
+https://geoattend.fly.dev/auth/login/
+
+--===============2243745327934243947==
+Content-Type: text/html; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 8bit
+
+<!doctype html><html><body style="margin:0;padding:0;background:#f5f7fb;font-family:'Segoe UI',Arial,sans-serif;color:#0f172a">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#f5f7fb;padding:28px 12px">
+<tr><td align="center">
+  <table width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;background:#fff;border-radius:14px;overflow:hidden;box-shadow:0 6px 24px rgba(15,23,42,.08)">
+    <tr><td style="background:linear-gradient(135deg,#4f46e5,#06b6d4);padding:22px 26px;color:#fff">
+      <div style="font-size:19px;font-weight:700">📍 GeoAttend</div>
+      <div style="font-size:12px;opacity:.85">Geo-verified classroom attendance</div>
+    </td></tr>
+    <tr><td style="padding:26px">
+<h2 style="margin:0 0 8px;font-size:19px">Welcome, Test 👋</h2>
+<p style="color:#475569;font-size:14px">Your Teacher account is active. You can sign in any time with <b>teacher1.ce@demo.edu</b>.</p>
+<div style="text-align:center;margin:24px 0">
+  <a href="https://geoattend.fly.dev/auth/login/" style="background:#4f46e5;color:#fff;text-decoration:none;padding:12px 28px;border-radius:10px;font-weight:600;display:inline-block">Go to GeoAttend</a>
+</div>
+</td></tr>
+    <tr><td style="padding:16px 26px;background:#f8fafc;color:#64748b;font-size:11px;border-top:1px solid #e2e8f0">
+      This is an automated message from GeoAttend. Please do not reply.<br>&copy; 2026 GeoAttend
+    </td></tr>
+  </table>
+</td></tr></table>
+</body></html>
+
+--===============2243745327934243947==--
+
+-------------------------------------------------------------------------------

@@ -127,6 +127,7 @@ $(function(){
       $("#s-count").text(studentRows.length + " students"); GA.done("#s-count");
       $("#s-export").attr("href", "{% url 'dashboard:export_students' %}?"+$.param(f));
       const cols = [
+        GA.instituteCol(),
         { key:"name", label:"Student", render:(v,r)=>'<div class="d-flex align-items-center gap-2">'+GA.avatar(v)+
           '<div><div class="fw-600">'+GA.esc(v)+'</div><small class="text-muted-2">'+GA.esc(r.email)+'</small></div></div>' },
         { key:"roll", label:"Class roll" },
@@ -134,7 +135,7 @@ $(function(){
         // than an empty cell that reads as a rendering fault.
         { key:"exam_roll", label:"Exam roll",
           render:v=> v ? GA.esc(v) : '<span class="text-muted-2">—</span>' },
-        { key:"department", label:"Department" },
+        GA.instituteCol(),{ key:"department", label:"Department" },
         { key:"batch", label:"Batch" },
         { key:"held", label:"Held", className:"text-center" },
         { key:"attended", label:"Attended", className:"text-center",
@@ -181,6 +182,7 @@ $(function(){
           backgroundColor:rows.map(r=> r.percentage>=85?"#10b981":r.percentage>=75?"#3b82f6":r.percentage>=60?"#f59e0b":"#ef4444"),
           borderRadius:6 }]}, { indexAxis:"y", scales:{ x:{max:100} } });
       GA.table("#tbl-subjects",{ csv:false, perPage:12, rows:rows, empty:"No classes conducted.", columns:[
+        GA.instituteCol(),
         { key:"code", label:"Code", render:v=>'<span class="ga-pill pill-violet">'+GA.esc(v)+'</span>' },
         { key:"name", label:"Subject" },
         GA.degreeCol(),GA.subjectTypeCol(),
@@ -211,6 +213,7 @@ $(function(){
         datasets:[{ label:"Attendance %", data:rows.map(r=>r.percentage), backgroundColor:"#4f46e5", borderRadius:6 }]},
         { scales:{ y:{max:100} } });
       GA.table("#tbl-batches",{ perPage:6, rows:rows, empty:"No data.", columns:[
+        GA.instituteCol(),
         { key:"label", label:"Batch" }, { key:"classes", label:"Classes", className:"text-center" },
         { key:"percentage", label:"Attendance", width:"160px",
           render:(v,r)=>GA.barWithManual(v, r.manual, r.present) }]});
@@ -222,6 +225,7 @@ $(function(){
         datasets:[{ label:"Attendance %", data:rows.map(r=>r.percentage), backgroundColor:"#10b981", borderRadius:6 }]},
         { scales:{ y:{max:100} } });
       GA.table("#tbl-depts",{ perPage:6, rows:rows, empty:"No data.", columns:[
+        GA.instituteCol(),
         { key:"label", label:"Department" }, { key:"classes", label:"Classes", className:"text-center" },
         { key:"percentage", label:"Attendance", width:"160px",
           render:(v,r)=>GA.barWithManual(v, r.manual, r.present) }]});
@@ -246,6 +250,7 @@ $(function(){
           pointRadius:3, borderWidth:2, yAxisID:"y1" }
       ]}, { plugins:{legend:{display:true}}, scales:{ y:{beginAtZero:true}, y1:{position:"right", max:100, grid:{display:false}} } });
       GA.table("#tbl-teachers",{ perPage:10, rows:rows, empty:"No sessions in this range.", columns:[
+        GA.instituteCol(),
         { key:"label", label:"Teacher", render:(v)=>'<div class="d-flex align-items-center gap-2">'+GA.avatar(v)+'<span class="fw-600">'+GA.esc(v)+'</span></div>' },
         { key:"classes", label:"Classes conducted", className:"text-center" },
         { key:"percentage", label:"Average attendance", width:"200px",

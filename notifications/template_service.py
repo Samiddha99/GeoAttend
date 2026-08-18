@@ -63,14 +63,17 @@ def validate_body(body):
 
 
 def create_template(*, institute, user, audience, name, body, category="UTILITY",
-                    language="en", submit=True):
+                    language="en", submit=True, university=None):
     """
     Persist the wording and (optionally) push it to Twilio for approval.
 
     Returns the :class:`WhatsAppTemplate`; check ``.status`` and ``.last_error``.
     """
     template = WhatsAppTemplate.objects.create(
-        institute=institute,
+        # Exactly one owner. A university registers its own wording against its
+        # own sender; an institute registers its own.
+        institute=None if university is not None else institute,
+        university=university,
         audience=audience,
         name=name.strip()[:120],
         twilio_name=make_twilio_name(institute, name),
@@ -141,20 +144,31 @@ def sync_template(template, timeout=None):
     return template
 
 
-def pending_templates(institute):
+def owner_filter(owner):
+    """
+    Narrow a template queryset to one owner.
+
+    `owner` is an Institute or a University. Matched on the class name rather
+    than an isinstance import, so this module keeps no dependency on accounts.
+    """
+    key = "university" if type(owner).__name__ == "University" else "institute"
+    return {key: owner}
+
+
+def pending_templates(owner):
     """Templates Twilio has not yet decided — the only ones worth polling."""
     return WhatsAppTemplate.objects.filter(
-        institute=institute,
         status__in=[WhatsAppTemplate.Status.RECEIVED, WhatsAppTemplate.Status.PENDING],
+        **owner_filter(owner),
     ).exclude(content_sid="")
 
 
-def sync_all(institute, *, timeout=None):
+def sync_all(owner, *, timeout=None):
     """Refresh every template still awaiting a verdict."""
-    return [sync_template(t, timeout=timeout) for t in pending_templates(institute)]
+    return [sync_template(t, timeout=timeout) for t in pending_templates(owner)]
 
 
-def autosync(institute):
+def autosync(owner):
     """
     Opportunistic refresh, run when a page that shows template status opens.
 
@@ -168,6 +182,8 @@ def autosync(institute):
 
     Failures are swallowed on purpose: a page must still render when Twilio is
     unreachable. `sync_template` records the error on the row either way.
+
+    `owner` is an Institute or a University — whichever holds the templates.
     """
     conf = settings.WHATSAPP
     if not conf.get("AUTOSYNC", True) or not wa.is_configured():
@@ -175,7 +191,7 @@ def autosync(institute):
 
     cutoff = timezone.now() - dt.timedelta(
         seconds=int(conf.get("AUTOSYNC_THROTTLE_SEC", 120) or 0))
-    due = [t for t in pending_templates(institute)
+    due = [t for t in pending_templates(owner)
            if t.last_synced_at is None or t.last_synced_at <= cutoff]
     if not due:
         return []
@@ -191,8 +207,21 @@ def autosync(institute):
 
 
 def templates_for(user, audience=None, approved_only=False):
-    """Templates belonging to this user's institute."""
-    qs = WhatsAppTemplate.objects.filter(institute=user.institute, is_active=True)
+    """
+    Templates this account may use.
+
+    A university sees only its own — never the institutes'. That is deliberate
+    and is the one place where university access is *narrower* than a head's:
+    an institute's approved wording is registered against that institute's
+    WhatsApp sender and speaks in its voice, so a university borrowing it would
+    be sending messages that appear to come from the college.
+    """
+    if getattr(user, "is_university", False):
+        qs = WhatsAppTemplate.objects.filter(university_id=user.university_id,
+                                             is_active=True)
+    else:
+        qs = WhatsAppTemplate.objects.filter(institute=user.institute,
+                                             is_active=True)
     if audience:
         qs = qs.filter(audience=audience)
     if approved_only:
@@ -222,4 +251,8 @@ def serialise(template):
         "created_at": template.created_at.strftime("%d %b %Y, %H:%M"),
         "last_synced_at": (template.last_synced_at.strftime("%d %b %Y, %H:%M")
                            if template.last_synced_at else ""),
+        # A university-owned template belongs to no single institute, so it
+        # says so rather than borrowing the name of one it happens to reach.
+        "institute": (template.institute.name if template.institute_id
+                      else "All institutes"),
     }

@@ -111,6 +111,11 @@ MIDDLEWARE = [
     # passes straight through both, and this resolves which child they are
     # looking at before any view runs.
     "accounts.middleware.GuardianChildMiddleware",
+    # Before any view runs, so the institute filter is already applied by the
+    # time a selector asks `institutes_for(user)`. Nothing above it is
+    # university-scoped, so its position relative to the guardian gates is
+    # arbitrary; being ahead of every view is not.
+    "accounts.middleware.UniversityFocusMiddleware",
     "accounts.middleware.ActivityTrackingMiddleware",
     "core.middleware.AjaxExceptionMiddleware",
 ]
@@ -238,6 +243,9 @@ STORAGES = {
         # "BACKEND": "storages.backends.s3boto3.S3Boto3Storage",
     },
     "staticfiles": {
+        # Hashed, compressed, long-cached — right for production and actively
+        # harmful in development, where it pins every page to whatever was in
+        # STATIC_ROOT the last time collectstatic ran. See the block below.
         "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
         # "BACKEND": "storages.backends.s3boto3.S3Boto3Storage"
     },
@@ -246,6 +254,36 @@ STORAGES = {
 STATIC_URL = "/static/"
 STATICFILES_DIRS = [BASE_DIR / "static"]
 STATIC_ROOT = BASE_DIR / "staticfiles"
+
+if DEBUG:
+    # --------------------------------------------------------------------- #
+    #  Serve static files from the source tree, not from STATIC_ROOT.
+    # --------------------------------------------------------------------- #
+    # WhiteNoiseMiddleware sits above Django's own static handler, so it
+    # answers /static/ first and answers it from STATIC_ROOT. In development
+    # that means every edit to app.js or a stylesheet is invisible until
+    # `collectstatic` is run again — and nothing says so. The symptom is a
+    # JavaScript function that plainly exists in the file the editor is showing
+    # and does not exist in the browser, which reads as a caching problem, a
+    # syntax error, anything but a stale copy.
+    #
+    # This is not hypothetical: a five-week-old app.js was served this way,
+    # missing every helper added since.
+    #
+    # `USE_FINDERS` makes WhiteNoise resolve through the staticfiles finders —
+    # the source directories — and `AUTOREFRESH` makes it re-read a file when
+    # it changes on disk rather than caching it for the process lifetime. The
+    # plain storage backend drops the content hashes, which have nothing to
+    # offer locally and would otherwise need a manifest that only collectstatic
+    # can write.
+    WHITENOISE_USE_FINDERS = True
+    WHITENOISE_AUTOREFRESH = True
+    STORAGES = {
+        **STORAGES,
+        "staticfiles": {
+            "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
+        },
+    }
 
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
@@ -264,6 +302,7 @@ ADMINS = [
 MANAGERS = ADMINS
 
 EMAIL_BACKEND = env("EMAIL_BACKEND")
+EMAIL_FILE_PATH = BASE_DIR / 'sent_emails'
 EMAIL_HOST = env("EMAIL_HOST")
 EMAIL_USE_TLS = True
 
@@ -308,6 +347,10 @@ SENDGRID_TIMEOUT = env_int("SENDGRID_TIMEOUT", 20)
 # Send off the request thread. 0 = auto (CPU count - 2, floor 1, ceiling 32).
 EMAIL_ASYNC = env_bool("EMAIL_ASYNC", True)
 EMAIL_MAX_WORKERS = env_int("EMAIL_MAX_WORKERS", 0)
+
+# KYC Verification
+KYC_VERIFICATION_DEVELOPER_KEY = env("KYC_VERIFICATION_DEVELOPER_KEY")
+KYC_VERIFICATION_ACCESS_KEY = env("KYC_VERIFICATION_ACCESS_KEY")
 
 # --------------------------------------------------------------------------- #
 #  Domain policy (all enforced server-side)

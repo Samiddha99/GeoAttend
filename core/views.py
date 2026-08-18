@@ -28,3 +28,8 @@ def error_404(request, exception=None):
 
 def error_500(request):
     return render(request, "errors/500.html", status=500)
+
+
+
+def verify_pan(request):
+    d

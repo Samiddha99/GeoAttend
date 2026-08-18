@@ -81,3 +81,36 @@ def send_low_attendance_alert(user, rows, threshold):
         "low_attendance",
         {"user": user, "rows": rows, "threshold": threshold},
     )
+
+
+def send_teacher_suspension(teacher, reason, actor, recipients, *, lifted=False):
+    """
+    Tell the teacher, their HoD and the institute head about a suspension.
+
+    **One message with all three in `To`, not three messages.** They are being
+    told the same thing about the same person, and a suspension the teacher can
+    see their HoD was copied on is one that will not be quietly disputed later.
+    It also means the three cannot disagree about what was said.
+
+    The reason is quoted verbatim. Paraphrasing a sanction is how an appeal
+    ends up being about the paraphrase.
+    """
+    body = actor.university if getattr(actor, "university_id", None) else None
+    who = (body.short_name or body.name) if body else "Your affiliating university"
+    verb = "lifted" if lifted else "suspended"
+    return _send(
+        (f"{teacher.get_full_name()}: suspension {verb} by {who}" if lifted
+         else f"{teacher.get_full_name()} has been suspended by {who}"),
+        recipients,
+        "teacher_suspension",
+        {
+            "teacher": teacher,
+            "reason": reason,
+            "university": who,
+            "lifted": lifted,
+            "department": teacher.department,
+            "institute": teacher.institute,
+            "when": timezone.now(),
+        },
+        messageGroup="TEACHER_SUSPENSION",
+    )

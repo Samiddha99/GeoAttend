@@ -1,0 +1,71 @@
+Content-Type: multipart/alternative;
+ boundary="===============5231985551601300630=="
+MIME-Version: 1.0
+Subject: You have been invited to Demo Institute of Technology on GeoAttend
+From: Samiddha Chakrabarti <samiddha99@gmail.com>
+To: hod.ece@demo.eduk
+Reply-To: samiddha99@gmail.com
+Date: Mon, 10 Aug 2026 18:54:39 -0000
+Message-ID: <178638807948.7240.4269343892780757551@Samiddha>
+unique-message-id: 5bc8693b361440fd8c9683f5dfe2fa0d
+message-group: INVITATION
+
+--===============5231985551601300630==
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+
+You've been invited to GeoAttend as Head of Department
+
+Demo Institute of Technology added hod.ece@demo.eduk to the Electronics &amp; Communication department.
+
+- Department: Electronics &amp; Communication (ECE)
+
+Complete your registration here:
+https://geoattend.fly.dev/auth/invite/nwSkghsiwy9s7stRmk2nfj7KS1MOk5Jsw54i6MluIeA/
+
+This link expires in 7 days.
+
+--===============5231985551601300630==
+Content-Type: text/html; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 8bit
+
+<!doctype html><html><body style="margin:0;padding:0;background:#f5f7fb;font-family:'Segoe UI',Arial,sans-serif;color:#0f172a">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#f5f7fb;padding:28px 12px">
+<tr><td align="center">
+  <table width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;background:#fff;border-radius:14px;overflow:hidden;box-shadow:0 6px 24px rgba(15,23,42,.08)">
+    <tr><td style="background:linear-gradient(135deg,#4f46e5,#06b6d4);padding:22px 26px;color:#fff">
+      <div style="font-size:19px;font-weight:700">📍 GeoAttend</div>
+      <div style="font-size:12px;opacity:.85">Geo-verified classroom attendance</div>
+    </td></tr>
+    <tr><td style="padding:26px">
+<h2 style="margin:0 0 8px;font-size:19px">You've been invited as Head of Department</h2>
+<p style="color:#475569;font-size:14px;margin:0 0 16px">
+  <b>Demo Institute of Technology</b> has added <b>hod.ece@demo.eduk</b> to GeoAttend
+   in the <b>Electronics &amp; Communication</b> department.
+  Click below to set your password and activate your account.
+</p>
+
+<table style="width:100%;background:#f8fafc;border-radius:10px;padding:12px;margin:0 0 18px">
+  <tr><td style="font-size:13px;color:#334155;padding:3px 10px">• Department: Electronics &amp; Communication (ECE)</td></tr>
+</table>
+
+<div style="text-align:center;margin:24px 0">
+  <a href="https://geoattend.fly.dev/auth/invite/nwSkghsiwy9s7stRmk2nfj7KS1MOk5Jsw54i6MluIeA/" style="background:#4f46e5;color:#fff;text-decoration:none;padding:13px 30px;
+     border-radius:10px;font-weight:600;font-size:15px;display:inline-block">Complete my registration</a>
+</div>
+<p style="color:#64748b;font-size:12px;word-break:break-all">
+  If the button doesn't work, paste this link into your browser:<br>https://geoattend.fly.dev/auth/invite/nwSkghsiwy9s7stRmk2nfj7KS1MOk5Jsw54i6MluIeA/</p>
+<p style="color:#64748b;font-size:12px">This invitation expires in 7 days. Your email and role are fixed by your institute and cannot be changed.</p>
+</td></tr>
+    <tr><td style="padding:16px 26px;background:#f8fafc;color:#64748b;font-size:11px;border-top:1px solid #e2e8f0">
+      This is an automated message from GeoAttend. Please do not reply.<br>&copy; 2026 GeoAttend
+    </td></tr>
+  </table>
+</td></tr></table>
+</body></html>
+
+--===============5231985551601300630==--
+
+-------------------------------------------------------------------------------

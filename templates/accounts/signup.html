@@ -42,12 +42,48 @@
             </div>
             <div class="col-md-6 mb-0">
               <label class="form-label">Address</label>
-              <textarea class="form-control" name="address" rows="1" placeholder="City, State"></textarea>
+              <textarea class="form-control" name="address" rows="1" placeholder="Street, city"></textarea>
             </div>
+            {% include "partials/place_picker.html" %}
           </div>
+
+          <hr class="my-4">
+          <h5 class="fw-bold mb-1">What do you teach, and who awards the degree?</h5>
+          <p class="text-muted-2 fs-13 mb-3">
+            Pick every discipline you offer. For each one, name the university
+            or board that affiliates you — or say you award your own degrees.
+            An institute can answer to different bodies for different
+            disciplines, which is why they are asked one at a time.
+          </p>
+          <div id="disciplines">
+            {% for d in disciplines %}
+            <div class="border rounded-3 p-2 mb-2 ga-discipline" data-discipline="{{ d.value }}">
+              <div class="form-check mb-0">
+                <input class="form-check-input d-pick" type="checkbox" name="disciplines"
+                       value="{{ d.value }}" id="d-{{ d.value }}">
+                <label class="form-check-label fw-600" for="d-{{ d.value }}">{{ d.label }}</label>
+              </div>
+              <!-- Revealed only when the discipline is ticked: an affiliation
+                   dropdown for a subject you do not teach is noise. -->
+              <div class="mt-2 d-none d-affiliation">
+                <label class="form-label fs-13 mb-1">Affiliating university or board *</label>
+                <select class="form-select form-select-sm" data-affiliation="{{ d.value }}"
+                        name="affiliation_{{ d.value }}">
+                  <option value="">Loading…</option>
+                </select>
+              </div>
+            </div>
+            {% endfor %}
+          </div>
+          <div class="invalid-feedback d-block" id="disciplines-err"></div>
+
           <button type="button" class="btn btn-primary w-100 mt-4 btn-lg" data-next="2">
             Continue <i class="fa-solid fa-arrow-right ms-2"></i>
           </button>
+          <div class="text-center mt-3">
+            <small class="text-muted-2">Registering a university or board instead?
+              <a href="{% url 'accounts:university_signup' %}" class="fw-600">Register a university</a></small>
+          </div>
         </div>
 
         <!-- step 2 -->
@@ -122,9 +158,60 @@
 {% endblock %}
 
 {% block scripts %}
+{{ districts_json|json_script:"districts-data" }}
 <script>
 $(function(){
   const $form = $("#signup-form");
+
+  /* ---------------------------------------------------- state → district */
+  // Shipped with the page rather than fetched per change: this form is used
+  // before the account exists, and a person fills these two fields once.
+  const DISTRICTS = JSON.parse(document.getElementById("districts-data").textContent);
+
+  $("#f-state").on("change", function(){
+    const list = DISTRICTS[$(this).val()] || [];
+    $("#f-district")
+      .prop("disabled", !list.length)
+      .html(list.length
+        ? '<option value="">Choose…</option>' +
+          list.map(d => '<option value="'+GA.esc(d)+'">'+GA.esc(d)+'</option>').join("")
+        : '<option value="">Choose a state first</option>');
+  });
+
+  /* ------------------------------------------- discipline → affiliation */
+  // Loaded per discipline, and only once: the list of bodies that affiliate
+  // engineering does not change while somebody fills in a form.
+  const loaded = {};
+
+  function loadBodies(discipline){
+    const $select = $('[data-affiliation="'+discipline+'"]');
+    if (loaded[discipline]) return;
+    loaded[discipline] = true;
+    GA.get("{% url 'accounts:api_affiliating_bodies' %}", {discipline: discipline})
+      .done(function(res){
+        const rows = res.data.rows || [];
+        $select.html(
+          '<option value="">Choose…</option>' +
+          '<option value="AUTONOMOUS">Autonomous — we award our own degrees</option>' +
+          rows.map(r => '<option value="'+GA.esc(r.id)+'">'+GA.esc(r.name)+'</option>').join(""));
+        if (!rows.length){
+          // Worth saying plainly. Otherwise the only option is Autonomous and
+          // it looks like the form is broken.
+          $select.after('<div class="form-text">No affiliating body is '+
+            'registered for this discipline yet. Choose Autonomous, or ask '+
+            'your university to register.</div>');
+        }
+      })
+      .fail(function(){ loaded[discipline] = false; });
+  }
+
+  $(".d-pick").on("change", function(){
+    const $box = $(this).closest(".ga-discipline");
+    const on = this.checked;
+    $box.find(".d-affiliation").toggleClass("d-none", !on);
+    $box.find("select").prop("required", on);
+    if (on) loadBodies($box.data("discipline"));
+  });
 
   function goto(step){
     $(".step-pane").addClass("d-none").filter('[data-pane="'+step+'"]').removeClass("d-none");
@@ -142,6 +229,25 @@ $(function(){
       $(this).toggleClass("is-invalid", bad);
       if (bad) ok = false;
     });
+    // Checked here as well as on the server: the server is what enforces it,
+    // but discovering the rule after an email round trip is a poor way to be
+    // told you forgot to tick a box.
+    const picked = $(".d-pick:checked");
+    if (!picked.length){
+      $("#disciplines-err").text("Choose at least one discipline.");
+      ok = false;
+    } else {
+      $("#disciplines-err").text("");
+      picked.each(function(){
+        const $sel = $(this).closest(".ga-discipline").find("select");
+        if (!$sel.val()){
+          $sel.addClass("is-invalid");
+          $("#disciplines-err").text(
+            "Choose an affiliating body for each discipline, or mark it Autonomous.");
+          ok = false;
+        } else { $sel.removeClass("is-invalid"); }
+      });
+    }
     if (!ok) { GA.toast("Please fill the required fields.", "warn"); return; }
     goto(2);
   });
@@ -213,7 +319,7 @@ $(function(){
   function startCooldown(sec){
     clearInterval(cd);
     let left = sec;
-    $("#resend").addClass("disabled text-muted-2");
+    // $("#resend").addClass("disabled text-muted-2");
     cd = setInterval(function(){
       $("#cooldown").text("(" + left + "s)");
       if (--left < 0){ clearInterval(cd); $("#cooldown").text(""); $("#resend").removeClass("disabled text-muted-2"); }

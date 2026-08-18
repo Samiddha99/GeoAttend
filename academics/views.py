@@ -7,37 +7,67 @@ from django.http import FileResponse, Http404
 from django.shortcuts import get_object_or_404, render
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.timezone import localtime
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.decorators.http import require_GET, require_POST
 
 from accounts.emails import send_invitation
 from accounts import face_service
-from accounts.models import ActivityLog, FaceEnrolment, FaceSample, Invitation
+from accounts.models import (
+    ActivityLog,
+    Discipline,
+    FaceEnrolment,
+    FaceSample,
+    Invitation,
+)
 from accounts.services import invite_user, unlink_device
+from accounts import pan as pan_rules
+from accounts import suspension
+from accounts.suspension import may_suspend as can_suspend
 from notifications.whatsapp import normalise_msisdn
 from core.decorators import guardian_readonly, role_required
+from core.enums import RowStatus
 from core.http import fail, form_errors, ok
-from core.utils import clean_object_id, clean_object_ids
+from core.utils import clean_object_id, clean_object_ids, parse_date
 
-from .forms import BatchForm, DepartmentForm, StudentEditForm, SubjectForm, TeacherInviteForm
+from . import catalogue
+from .curriculum import (
+    STATE_ARCHIVED,
+    department_states,
+    sync_revoked,
+    effective_state,
+    live_departments,
+    own_departments,
+    reactivate_department_contents,
+    may_define_department,
+    selectable_disciplines,
+    assert_writable,
+    is_read_only,
+)
+from .services import HodError
+from .forms import BatchForm, DepartmentForm, HodEmailForm, StudentEditForm, SubjectForm, TeacherInviteForm
 from .importer import (
     build_roster_workbook,
     build_template_workbook,
     import_students,
     read_rows,
 )
+from . import allocation
+from . import sections
 from .models import (
     Batch,
     Degree,
     Department,
     Enrollment,
     ImportJob,
+    Section,
     Subject,
     SubjectType,
     TeacherAssignment,
 )
 from .selectors import (
     all_students_for,
+    semester_options,
     batches_for,
     current_department,
     departments_for,
@@ -48,8 +78,8 @@ from .selectors import (
     visible_teachers_for,
 )
 
-HEAD, HOD, TEACHER, STUDENT, GUARDIAN = (
-    "HEAD", "HOD", "TEACHER", "STUDENT", "GUARDIAN")
+HEAD, HOD, TEACHER, STUDENT, GUARDIAN, UNIVERSITY = (
+    "HEAD", "HOD", "TEACHER", "STUDENT", "GUARDIAN", "UNIVERSITY")
 
 
 def dial(raw):
@@ -83,29 +113,73 @@ def _scoped_department(request, dept_id=None):
 # --------------------------------------------------------------------------- #
 #  Pages
 # --------------------------------------------------------------------------- #
-@role_required(HEAD)
+@role_required(HEAD, UNIVERSITY)
 @ensure_csrf_cookie
 def departments_page(request):
-    return render(request, "academics/departments.html", {"form": DepartmentForm()})
+    institute = _target_institute(request)
+    # Only what this actor governs — see academics/curriculum.py. An empty list
+    # is a real answer: an institute with no autonomous discipline has no
+    # department of its own to create, and the page says so instead of showing
+    # a dropdown with nothing in it.
+    allowed = selectable_disciplines(request.user, institute)
+    from accounts.models import Discipline
+
+    return render(request, "academics/departments.html", {
+        "form": DepartmentForm(user=request.user, institute=institute),
+        "disciplines": allowed,
+        # The filter offers every discipline that could appear in the table,
+        # which is wider than what can be created: departments in affiliated
+        # disciplines are listed here too, just not editable.
+        "filter_disciplines": [{"value": v, "label": l}
+                               for v, l in Discipline.choices],
+        "can_add": bool(allowed),
+    })
 
 
-@role_required(HEAD, HOD)
+@role_required(HEAD, HOD, UNIVERSITY)
 @ensure_csrf_cookie
 def subjects_page(request):
     return render(request, "academics/subjects.html", {
-        "form": SubjectForm(), "departments": departments_for(request.user),
+        # Two lists, because they answer two questions. A *form* offers live
+        # departments only: filing a new subject under an archived one would
+        # create a row that is archived the moment it exists. A *filter* offers
+        # all of them, because the table it filters contains archived and
+        # revoked rows and leaving their departments out makes those rows
+        # unfindable.
+        # And only departments the institute runs itself. Papers for an
+        # adopted department are published by the university; listing it here
+        # would offer a choice `api_subject_save` refuses. See
+        # academics/curriculum.own_departments.
+        "form": SubjectForm(),
+        "departments": live_departments(
+            own_departments(departments_for(request.user))),
+        "can_add": (not request.user.is_university and live_departments(
+            own_departments(departments_for(request.user))).exists()),
+        "filter_departments": departments_for(request.user).order_by("name"),
     })
 
 
-@role_required(HEAD, HOD)
+@role_required(HEAD, HOD, UNIVERSITY)
 @ensure_csrf_cookie
 def batches_page(request):
+    # The dropdown offers only departments the institute runs itself. Batches
+    # in an adopted department come from the university's catalogue, and
+    # `api_batch_save` refuses one created here — listing them would be
+    # offering a choice that comes back as an error. The *filter* above the
+    # table still shows every department, because you look at what you cannot
+    # edit. See academics/curriculum.own_departments.
+    mine = live_departments(own_departments(departments_for(request.user)))
     return render(request, "academics/batches.html", {
-        "form": BatchForm(), "departments": departments_for(request.user),
+        "form": BatchForm(),
+        "departments": mine,
+        # False for a university too. This page shows the colleges' own rows;
+        # a university adds cohorts on its catalogue screen.
+        "can_add": not request.user.is_university and mine.exists(),
+        "filter_departments": departments_for(request.user).order_by("name"),
     })
 
 
-@role_required(HEAD, HOD, TEACHER, STUDENT, GUARDIAN)
+@role_required(HEAD, HOD, TEACHER, STUDENT, GUARDIAN, UNIVERSITY)
 @guardian_readonly
 @ensure_csrf_cookie
 def teachers_page(request):
@@ -119,14 +193,20 @@ def teachers_page(request):
     # the reasons for it — a teacher who has left, a private mobile — do not
     # change with who is doing the reading.
     is_student = request.user.role in (STUDENT, GUARDIAN)
-    institute = request.user.institute
+    # A university has no institute of its own, so the filter lists span every
+    # institute it reaches instead.
+    from accounts.scoping import institutes_for
+
+    institutes = institutes_for(request.user)
     # Filters span the institute now that the table does. They deliberately do
     # not come from api_lookups: for a teacher that endpoint returns only the
     # subjects they personally teach, which would be useless for finding a
     # colleague in another department.
     return render(request, "academics/teachers.html", {
         "form": TeacherInviteForm() if can_manage else None,
-        "departments": departments_for(request.user),   # invite/edit target list
+        # Live only: inviting a teacher into an archived department would
+        # hand them an account with nothing in it.
+        "departments": live_departments(departments_for(request.user)),
         "can_manage": can_manage,
         "is_student": is_student,
         # Staff mobile numbers are not published to students by default. Names,
@@ -134,10 +214,15 @@ def teachers_page(request):
         # student a teacher's personal number and a WhatsApp button is a
         # separate decision, and not one that can be walked back once made.
         "show_mobile": not is_student,
+        # Every department, archived ones included — see subjects_page. The
+        # *invite* dropdown above is the live-only one.
         "filter_departments": Department.objects.filter(
-            institute=institute, is_active=True).order_by("name"),
+            institute__in=institutes).order_by("name"),
         "filter_subjects": Subject.objects.filter(
-            department__institute=institute, is_active=True).order_by("code"),
+            department__institute__in=institutes, is_active=True).order_by("code"),
+        # Only the semesters that exist in scope, each once — see
+        # academics.selectors.semester_options for the trap in that query.
+        "semesters": semester_options(request.user),
     })
 
 
@@ -151,11 +236,20 @@ def _students_page(request, *, wide):
     wide=True   "Students" — every student in the institute. A teacher sees
                 this read-only apart from unlinking a device.
     """
-    staff = request.user.role in (HOD, HEAD)
+    staff = request.user.role in (HOD, HEAD, UNIVERSITY)
+    from accounts.scoping import institutes_for
+
     return render(request, "academics/students.html", {
-        "departments": (Department.objects.filter(
-            institute=request.user.institute, is_active=True).order_by("name")
-            if wide else departments_for(request.user)),
+        # The import modal's target list: live only.
+        "departments": (live_departments(Department.objects.filter(
+            institute__in=institutes_for(request.user))).order_by("name")
+            if wide else live_departments(departments_for(request.user))),
+        # The toolbar filter: everything, so an archived department's students
+        # can still be found.
+        "filter_departments": (
+            Department.objects.filter(
+                institute__in=institutes_for(request.user)).order_by("name")
+            if wide else departments_for(request.user).order_by("name")),
         # Both are head/HoD only. They are separate flags because they are
         # separate ideas: importing a roster and editing a row. Teachers get
         # neither on either screen.
@@ -164,18 +258,23 @@ def _students_page(request, *, wide):
         # The whole point of the wide screen for a teacher: unlink a device for
         # a student who is not in their own classes.
         "can_unlink_device": True,
+        # Live sections only, for the same reason the department filter differs
+        # from the department dropdown: a filter offering a retired section
+        # returns an empty table and reads as a bug. The *column* still shows a
+        # retired section's name against whoever is in one.
+        "filter_sections": sections.for_user(request.user),
         "wide": wide,
         "page_heading": "Students" if wide else "My students",
     })
 
 
-@role_required(HEAD, HOD, TEACHER)
+@role_required(HEAD, HOD, TEACHER, UNIVERSITY)
 @ensure_csrf_cookie
 def students_page(request):
-    return _students_page(request, wide=request.user.role in (HOD, HEAD))
+    return _students_page(request, wide=request.user.role in (HOD, HEAD, UNIVERSITY))
 
 
-@role_required(HEAD, HOD, TEACHER)
+@role_required(HEAD, HOD, TEACHER, UNIVERSITY)
 @ensure_csrf_cookie
 def all_students_page(request):
     """
@@ -191,25 +290,73 @@ def all_students_page(request):
 # --------------------------------------------------------------------------- #
 #  Departments + HoD invitations  (Head only)
 # --------------------------------------------------------------------------- #
-@role_required(HEAD)
+@role_required(HEAD, UNIVERSITY)
+@require_GET
+def api_department_options(request):
+    """
+    What the Add-a-department modal offers, per discipline.
+
+    One call, all disciplines, rather than a round trip each time the picker
+    changes: an institute holds a handful, and a dropdown that waits on the
+    network to populate is a dropdown people click twice.
+
+    `catalogue` is empty for an autonomous discipline, and that emptiness *is*
+    the instruction — the modal switches to name-and-code when it sees it,
+    rather than being told separately which mode to be in.
+    """
+    institute = _target_institute(request)
+    if institute is None:
+        return ok({"disciplines": []})
+
+    labels = dict(Discipline.choices)
+    rows = []
+    for affiliation in institute.affiliations.select_related("university"):
+        entries = catalogue.choices_for(institute, affiliation.discipline)
+        rows.append({
+            "value": affiliation.discipline,
+            "label": labels.get(affiliation.discipline, affiliation.discipline),
+            "autonomous": affiliation.university_id is None,
+            "university": (affiliation.university.short_name
+                           or affiliation.university.name)
+                          if affiliation.university_id else "",
+            "catalogue": [{"id": str(e.id), "name": e.name, "code": e.code,
+                           "subjects": e.subjects.count(),
+                           "batches": e.batches.count(),
+                           # Already running it, so the picker can say so
+                           # instead of letting somebody adopt twice and
+                           # wonder why nothing changed.
+                           "adopted": Department.objects.filter(
+                               institute=institute, source=e).exists()}
+                          for e in entries],
+        })
+    order = {value: i for i, (value, _) in enumerate(Discipline.choices)}
+    rows.sort(key=lambda r: order.get(r["value"], len(order)))
+    return ok({"disciplines": rows})
+
+
+@role_required(HEAD, UNIVERSITY)
 @require_GET
 def api_departments(request):
-    qs = (
-        departments_for(request.user)
-        .select_related("hod")
-        .annotate(
-            subject_count=Count("subjects", distinct=True),
-            # Counts deliberately ignore archived batches and their students.
-            batch_count=Count(
-                "batches", filter=Q(batches__is_active=True), distinct=True),
-            student_count=Count(
-                "students", filter=Q(students__batch__is_active=True), distinct=True),
-            teacher_count=Count(
-                "members", filter=Q(members__role=TEACHER), distinct=True
-            ),
-        )
-        .order_by("name")
-    )
+    qs = (departments_for(request.user)
+          .select_related("hod", "institute")
+          .order_by("name"))
+    # One query for the whole page rather than one per row: governance is a
+    # lookup from (institute, discipline) and every row here shares an
+    # institute in all but the university's case.
+    departments = list(qs)
+    from accounts.models import InstituteAffiliation
+
+    holders = {
+        (a.institute_id, a.discipline): a.university
+        for a in InstituteAffiliation.objects.filter(
+            institute__in={d.institute_id for d in departments}
+        ).select_related("university")
+    }
+    governors = {d.pk: holders.get((d.institute_id, d.discipline))
+                 for d in departments if d.discipline}
+    states = department_states(departments)
+    counts = _department_counts(departments)
+
     rows = [{
         "id": d.id,
         "name": d.name,
@@ -217,95 +364,223 @@ def api_departments(request):
         "hod_name": d.hod.full_name if d.hod else "",
         "hod_email": d.hod.email if d.hod else "",
         "hod_status": d.hod_status,
-        "subject_count": d.subject_count,
-        "batch_count": d.batch_count,
-        "student_count": d.student_count,
-        "teacher_count": d.teacher_count,
+        "subject_count": counts[d.pk]["subjects"],
+        "batch_count": counts[d.pk]["batches"],
+        "student_count": counts[d.pk]["students"],
+        "teacher_count": counts[d.pk]["teachers"],
         "is_active": d.is_active,
-    } for d in qs]
+        # Only a university ever renders this — GA.instituteCol() returns null
+        # for everyone else — but it is always sent, so the column never has to
+        # care who is asking.
+        "institute": d.institute.code,
+        "institute_name": d.institute.name,
+        "discipline": d.discipline,
+        "discipline_label": d.get_discipline_display(),
+        # Two separate rights — see api_department_save. `can_define` drives the
+        # edit and delete controls; the HoD stays changeable either way.
+        "can_define": (governors.get(d.pk).pk == request.user.university_id
+                       if governors.get(d.pk) is not None
+                       else not request.user.is_university),
+        "governed_by": (governors[d.pk].short_name or governors[d.pk].name)
+                       if governors.get(d.pk) else "",
+        "status": _row_status(d),
+        "state": effective_state(d),
+        "revoked": d.is_revoked,
+    } for d in departments]
     return ok({"rows": rows})
 
 
-@role_required(HEAD)
+@role_required(HEAD, UNIVERSITY)
 @require_POST
 def api_department_save(request, pk=None):
+    """
+    Create or update one institute's department.
+
+    **Creating is discipline-first, and what happens next depends on it.**
+
+    * An *affiliated* discipline: the institute picks one of the departments
+      its university publishes and supplies a HoD email. It cannot type a name
+      — the name and code belong to the university, and a college inventing its
+      own would make its copy disagree with every other running the same
+      syllabus.
+    * An *autonomous* discipline: there is no university to publish one, so the
+      institute writes the name and code itself.
+
+    **Editing keeps two rights apart.** Defining a department — name, code,
+    discipline — follows whether it was adopted. Running it, meaning who leads
+    it, stays with the institute whatever the affiliation: a university setting
+    a syllabus has no view on which of the institute's staff heads the office,
+    and taking that away would leave an affiliated college unable to replace a
+    departing HoD.
+
+    So an institute editing an adopted department is allowed through with
+    everything except the HoD ignored rather than refused — refusing the whole
+    request would block the one change it is entitled to make.
+    """
     instance = get_object_or_404(departments_for(request.user), pk=pk) if pk else None
-    form = DepartmentForm(request.POST, instance=instance)
+    if instance is None:
+        return _create_department(request)
+
+    may_define = may_define_department(request.user, instance)
+    was_revoked = instance.is_revoked
+
+    if may_define:
+        form = DepartmentForm(request.POST, instance=instance,
+                              user=request.user,
+                              institute=_target_institute(request, instance))
+    else:
+        # Only the HoD is in play, so only the HoD is validated. Running the
+        # full form here would reject the request on a discipline the institute
+        # is not allowed to choose and never asked to change — refusing the one
+        # edit it *is* entitled to make.
+        form = HodEmailForm(request.POST)
     if not form.is_valid():
         return fail("Please correct the highlighted fields.", form_errors(form))
-    hod_email = form.cleaned_data.get("hod_email")
+
+    reactivated = None
     try:
         with transaction.atomic():
-            dept = form.save(commit=False)
-            dept.institute = request.user.institute
-            dept.save()
-            invited = False
-            if hod_email:
-                if dept.hod and dept.hod.email == hod_email and dept.hod.registration_completed:
-                    pass
-                else:
-                    clash = Department.objects.filter(hod__email=hod_email).exclude(pk=dept.pk).first()
-                    if clash:
-                        return fail(f"{hod_email} already leads {clash.name}.")
-                    user, invitation, _ = invite_user(
-                        email=hod_email, role=HOD, institute=request.user.institute,
-                        department=dept, invited_by=request.user,
-                        extra_lines=[f"Department: {dept.name} ({dept.code})"],
-                    )
-                    if invitation is None:
-                        return fail(
-                            f"{hod_email} already has an active account in this system."
-                        )
-                    dept.hod = user
-                    dept.save(update_fields=["hod"])
-                    invited = True
+            if may_define:
+                dept = form.save(commit=False)
+                dept.institute = _target_institute(request, instance)
+                dept.save()
+                sync_revoked(dept.institute)
+                dept.refresh_from_db()
+                if was_revoked and not dept.is_revoked:
+                    reactivated = reactivate_department_contents(
+                        dept, actor=request.user)
+                    dept.refresh_from_db()
+            else:
+                dept = Department.objects.get(pk=instance.pk)
+            invited = _set_hod(dept, form.cleaned_data.get("hod_email"),
+                               request.user)
+    except HodError as exc:
+        return fail(str(exc), {"hod_email": str(exc)})
     except IntegrityError:
         return fail("A department with that name or code already exists.")
+
     ActivityLog.log(request, action="DEPARTMENT_SAVED", detail=dept.name)
-    msg = "Department saved." + (f" Invitation emailed to {hod_email}." if invited else "")
-    return ok({"id": dept.id}, message=msg)
+    return ok({"id": dept.id, "reactivated": reactivated},
+              message=_saved_message(reactivated, invited,
+                                     form.cleaned_data.get("hod_email")))
 
 
+def _create_department(request):
+    """
+    The discipline-first create path.
+
+    Split out because creating and editing now ask different questions:
+    creating decides *where the department comes from*, editing only ever
+    changes what is already there.
+    """
+    discipline = (request.POST.get("discipline") or "").strip()
+    institute = _target_institute(request)
+    if institute is None:
+        return fail("Choose an institute first.")
+    if discipline not in Discipline.values:
+        return fail("Choose a discipline.", {"discipline": "This field is required."})
+
+    held = {a.discipline: a for a in institute.affiliations.all()}
+    affiliation = held.get(discipline)
+    if affiliation is None:
+        return fail(
+            "Your institute does not teach that discipline. Add it under "
+            "Profile & security first.", {"discipline": "Not on your record."})
+
+    hod_email = (request.POST.get("hod_email") or "").strip()
+
+    if affiliation.university_id is not None:
+        # Affiliated: adopt one of the university's, do not invent one.
+        entry_id = clean_object_id(request.POST.get("catalogue_entry") or "")
+        entry = catalogue.choices_for(institute, discipline).filter(
+            pk=entry_id).first() if entry_id else None
+        if entry is None:
+            return fail(
+                "Choose one of the departments your university publishes for "
+                "this discipline.",
+                {"catalogue_entry": "This field is required."})
+        try:
+            with transaction.atomic():
+                department = catalogue.adopt(institute=institute, entry=entry,
+                                             actor=request.user)
+                invited = _set_hod(department, hod_email, request.user)
+        except HodError as exc:
+            return fail(str(exc), {"hod_email": str(exc)})
+        ActivityLog.log(request, action="DEPARTMENT_ADOPTED",
+                        detail=f"{institute.name}: {entry.code}")
+        message = f"{entry.name} added, with everything your university publishes for it."
+        if invited:
+            message += f" Invitation emailed to {hod_email}."
+        return ok({"id": department.id}, message=message)
+
+    # Autonomous: nobody publishes one, so the institute writes it.
+    form = DepartmentForm(request.POST, user=request.user, institute=institute)
+    if not form.is_valid():
+        return fail("Please correct the highlighted fields.", form_errors(form))
+    try:
+        with transaction.atomic():
+            department = form.save(commit=False)
+            department.institute = institute
+            department.save()
+            invited = _set_hod(department, hod_email, request.user)
+    except HodError as exc:
+        return fail(str(exc), {"hod_email": str(exc)})
+    except IntegrityError:
+        return fail("A department with that name or code already exists.")
+    ActivityLog.log(request, action="DEPARTMENT_SAVED", detail=department.name)
+    message = "Department added."
+    if invited:
+        message += f" Invitation emailed to {hod_email}."
+    return ok({"id": department.id}, message=message)
+
+
+def _set_hod(department, email, actor):
+    from .services import assign_hod
+
+    _, invited = assign_hod(department, email, actor=actor)
+    return invited
+
+
+def _saved_message(reactivated, invited, hod_email):
+    if reactivated is not None:
+        touched = ", ".join(f"{n} {noun}" for noun, n in (
+            ("subjects", reactivated["subjects"]),
+            ("batches", reactivated["batches"]),
+            ("students", reactivated["students"]),
+            ("teachers", reactivated["teachers"])) if n)
+        message = ("Department reactivated"
+                   + (f", along with {touched}." if touched else ".")
+                   + " Archive anything that should stay hidden.")
+    else:
+        message = "Department saved."
+    if invited:
+        message += f" Invitation emailed to {hod_email}."
+    return message
+
+
+# --------------------------------------------------------------------------- #
+#  Restored after a refactor removed them by accident.
+#
+#  These three sat between `api_department_save` and `_department_counts`,
+#  and a replacement that sliced between those two names took them with it.
+#  Nothing failed at import — the URLconf resolves lazily — so the first
+#  sign was a 500 on a page nobody had opened since.
+# --------------------------------------------------------------------------- #
 @role_required(HEAD)
 @require_POST
 def api_department_delete(request, pk):
     dept = get_object_or_404(departments_for(request.user), pk=pk)
     if dept.students.exists() or dept.subjects.exists():
+        # Archiving rather than deleting: the rows underneath carry attendance,
+        # and `status` is the source of truth that `is_active` mirrors.
+        dept.status = RowStatus.ARCHIVED
         dept.is_active = False
-        dept.save(update_fields=["is_active"])
+        dept.save(update_fields=["status", "is_active"])
         return ok(message="Department archived (it still holds academic records).")
     name = dept.name
     dept.delete()
     ActivityLog.log(request, action="DEPARTMENT_DELETED", detail=name)
     return ok(message="Department removed.")
-
-
-@role_required(HEAD, HOD)
-@require_POST
-def api_invitation_resend(request, pk):
-    inv = get_object_or_404(
-        Invitation.objects.filter(institute=request.user.institute), pk=pk
-    )
-    if request.user.is_hod and inv.department_id != request.user.department_id:
-        return fail("You can only manage invitations in your own department.", status=403)
-    if inv.status == Invitation.Status.ACCEPTED:
-        return fail("That invitation has already been accepted.")
-    inv.refresh_token()
-    send_invitation(inv)
-    return ok(message=f"Invitation re-sent to {inv.email}.")
-
-
-@role_required(HEAD, HOD)
-@require_POST
-def api_invitation_revoke(request, pk):
-    inv = get_object_or_404(
-        Invitation.objects.filter(institute=request.user.institute), pk=pk
-    )
-    if inv.status == Invitation.Status.ACCEPTED:
-        return fail("That invitation has already been accepted.")
-    inv.status = Invitation.Status.REVOKED
-    inv.save(update_fields=["status"])
-    return ok(message=f"Invitation to {inv.email} revoked.")
 
 
 @role_required(HEAD, HOD)
@@ -331,13 +606,40 @@ def api_invitations(request):
     return ok({"rows": rows})
 
 
-# --------------------------------------------------------------------------- #
-#  Subjects
-# --------------------------------------------------------------------------- #
+@role_required(HEAD, HOD)
+@require_POST
+def api_invitation_revoke(request, pk):
+    inv = get_object_or_404(
+        Invitation.objects.filter(institute=request.user.institute), pk=pk
+    )
+    if inv.status == Invitation.Status.ACCEPTED:
+        return fail("That invitation has already been accepted.")
+    inv.status = Invitation.Status.REVOKED
+    inv.save(update_fields=["status"])
+    return ok(message=f"Invitation to {inv.email} revoked.")
+
+
+@role_required(HEAD, HOD)
+@require_POST
+def api_invitation_resend(request, pk):
+    inv = get_object_or_404(
+        Invitation.objects.filter(institute=request.user.institute), pk=pk
+    )
+    if request.user.is_hod and inv.department_id != request.user.department_id:
+        return fail("You can only manage invitations in your own department.", status=403)
+    if inv.status == Invitation.Status.ACCEPTED:
+        return fail("That invitation has already been accepted.")
+    inv.refresh_token()
+    send_invitation(inv)
+    return ok(message=f"Invitation re-sent to {inv.email}.")
+
+
 @role_required(HEAD, HOD, TEACHER, STUDENT)
 @require_GET
 def api_subjects(request):
-    qs = subjects_for(request.user).select_related("department")
+    qs = subjects_for(request.user).select_related(
+        "department", "department__institute",
+        "source__department__university")
     dept_id = request.GET.get("department")
     if dept_id:
         qs = qs.filter(department_id=dept_id)
@@ -364,6 +666,7 @@ def api_subjects(request):
                      enrollments__student__batch__is_active=True),
             distinct=True),
     )
+    subjects = list(qs)
     rows = [{
         "id": s.id, "code": s.code, "name": s.name, "semester": s.semester,
         "subject_type": s.subject_type,
@@ -371,22 +674,201 @@ def api_subjects(request):
         "degree": s.degree,
         "degree_label": s.get_degree_display(),
         "credits": s.credits, "department": s.department.name,
-        "department_id": s.department_id, "is_active": s.is_active,
+        "department_id": s.department_id,
+        "department_code": s.department.code,
+        "is_active": s.is_active,
         "teacher_count": s.teacher_count, "student_count": s.student_count,
-    } for s in qs]
+        # The code, not the name — the column is an identifier and a full name
+        # wraps. The name rides along for the tooltip.
+        "institute": s.department.institute.code,
+        "institute_name": s.department.institute.name,
+        "discipline": s.department.discipline,
+        "discipline_label": s.department.get_discipline_display(),
+        # Status and revocation are independent — see core/enums.py.
+        "status": _row_status(s),
+        "state": effective_state(s),
+        "revoked": s.is_revoked,
+        # Adopted from the university's catalogue, so theirs to change.
+        "owner": (s.source.department.university.short_name
+                  or s.source.department.university.name) if s.source_id else "",
+        "read_only": is_read_only(s, request.user),
+    } for s in subjects]
     return ok({"rows": rows})
 
 
-@role_required(HEAD, HOD)
+def _department_counts(departments, states=None):
+    """
+    How many live subjects, batches, students and teachers a department holds.
+
+    **One rule for every department, whatever its own state.** A count reads
+    `status` and nothing else — never `is_revoked`, never the department's
+    status. That is the fix for the bug this whole split exists to solve: a
+    revoked department reported *0 students* because "revoked" had overwritten
+    "active" on the way to the screen, so counting active students found none.
+    The department was full and the number said empty.
+
+    An archived department is the same case in a different disguise. It was
+    given a second rule ("count everything") to work around the same conflation,
+    and that rule is gone too: its students are still active students, so they
+    are still counted, and the number matches the table beside it.
+
+    **Four separate queries, on purpose.** These were four filtered `Count`
+    annotations on one queryset — four unrelated reverse relations walked in a
+    single statement. On MongoDB that is a lookup-and-unwind per relation and
+    the counts came back multiplied by each other's rows.
+    """
+    from django.db.models import Count
+
+    from accounts.models import User as UserModel
+
+    from core.enums import RowStatus
+
+    from .models import Batch, StudentProfile, Subject
+
+    ids = [d.pk for d in departments]
+    blank = {"subjects": 0, "batches": 0, "students": 0, "teachers": 0}
+    out = {pk: dict(blank) for pk in ids}
+    if not ids:
+        return out
+
+    def tally(queryset, key):
+        for row in (queryset.exclude(status=RowStatus.ARCHIVED)
+                    .filter(department_id__in=ids)
+                    .values("department_id").annotate(n=Count("id"))):
+            out[row["department_id"]][key] = row["n"]
+
+    tally(Subject.objects.all(), "subjects")
+    tally(Batch.objects.all(), "batches")
+    # A student also needs a live cohort. That is not a relabelling — the
+    # archived batch is a different fact about a different row — and the
+    # Students table hides them for the same reason, so the number matches
+    # what is on screen beneath it.
+    tally(StudentProfile.objects.filter(batch__is_active=True), "students")
+    tally(UserModel.objects.filter(role=UserModel.Role.TEACHER), "teachers")
+    return out
+
+
+def _row_status(row):
+    """
+    The status string a table renders for one row.
+
+    `REVOKED` when the flag is set, whatever the status underneath — that is
+    the fact which explains the row, and the pill has to lead with it. Anything
+    else is the row's own status, unmodified. Nothing here consults the
+    department: a student in an archived department is still an active student,
+    and saying otherwise is what made every count wrong.
+    """
+    from core.enums import REVOKED_KEY, SUSPENDED_KEY
+
+    # Suspension leads even over revocation. A revoked row is explained by its
+    # discipline, which the person can see in the next column; a suspension is
+    # a decision about this one person and is the only thing on the row that
+    # somebody has to act on.
+    if getattr(row, "is_suspended", False):
+        return SUSPENDED_KEY
+    if getattr(row, "is_revoked", False):
+        return REVOKED_KEY
+    return row.status
+
+
+def _target_institute(request, instance=None):
+    """
+    Which institute a department belongs to.
+
+    A university has none of its own, so it uses the one it is focused on (or
+    the row's, when editing). `request.user.institute` alone was None for a
+    university and produced a department attached to nothing.
+    """
+    if instance is not None:
+        return instance.institute
+    if request.user.is_university:
+        from accounts.scoping import active_institute
+
+        return active_institute(request)
+    return request.user.institute
+
+
+def _refuse_activation_in_a_dead_department(department, wants_active):
+    """
+    Message to refuse with, or None.
+
+    A row cannot be made active inside an archived or revoked department. Not
+    because its status would be overruled — statuses stand on their own now —
+    but because the row would then claim to be running inside something that is
+    not, and every screen would have to explain the contradiction.
+
+    Deactivating is always allowed: nothing about a dead department makes
+    switching a row *off* incoherent.
+    """
+    from core.enums import RowStatus
+
+    if not wants_active or department is None:
+        return None
+    if department.is_revoked:
+        return ("That department's discipline is no longer on your record, so "
+                "nothing in it can be made active. Put the department back "
+                "into a live discipline first.")
+    if department.status == RowStatus.ARCHIVED:
+        return ("That department is archived, so nothing in it can be made "
+                "active. Restore the department first, or choose another one.")
+    return None
+
+
+def _department_for_save(request, instance):
+    """
+    Which department a subject or batch should end up in.
+
+    Explicit or unchanged, never guessed. `_scoped_department` falls back to
+    the *first* department in scope when nothing is posted, which is the right
+    default for a create and completely wrong for an edit — a HoD saving a
+    subject from a form that has no department field would silently move it.
+    """
+    posted = (request.POST.get("department") or "").strip()
+    if posted:
+        return _scoped_department(request, posted)
+    if instance is not None:
+        return instance.department
+    return _scoped_department(request)
+
+
+@role_required(HEAD, HOD, UNIVERSITY)
 @require_POST
 def api_subject_save(request, pk=None):
-    dept = _scoped_department(request, request.POST.get("department") or None)
     instance = get_object_or_404(Subject, pk=pk, department__in=departments_for(request.user)) if pk else None
+
+    # A university writes the curriculum, not one institute's copy of it.
+    # Checked before the form so that an institute editing a row it does not
+    # own is refused on the rule rather than on a validation error.
+    if instance is not None:
+        try:
+            assert_writable(instance, request.user)
+        except PermissionError as exc:
+            return fail(str(exc), status=403)
+
+    # Creating one *inside* an adopted department is refused too — the twin of
+    # the batch rule. The university publishes that department's papers; a
+    # college adding its own beside them would teach a subject nobody else
+    # running the same syllabus has, and the marks would have nowhere to go.
+    dept = _department_for_save(request, instance)
+    if instance is None and dept is not None and dept.source_id is not None:
+        return fail(
+            "Your affiliating university publishes the subjects for this "
+            "department. Add subjects under a department you run yourself.",
+            {"department": "Set by your university."}, status=403)
+
     form = SubjectForm(request.POST, instance=instance)
     if not form.is_valid():
         return fail("Please correct the highlighted fields.", form_errors(form))
+    refusal = _refuse_activation_in_a_dead_department(
+        dept, form.cleaned_data.get("is_active"))
+    if refusal:
+        return fail(refusal, {"is_active": refusal})
     subject = form.save(commit=False)
-    subject.department = instance.department if instance else dept
+    # Editing may now move a subject between departments. It could not before,
+    # which left a subject stranded in a revoked department with no way out.
+    # `is_active` comes straight from the form's checkbox: ticked means active
+    # on arrival, unticked means archived — whatever state it was in before.
+    subject.department = dept
     try:
         subject.save()
     except IntegrityError:
@@ -395,10 +877,19 @@ def api_subject_save(request, pk=None):
     return ok({"id": subject.id}, message="Subject saved.")
 
 
-@role_required(HEAD, HOD)
+@role_required(HEAD, HOD, UNIVERSITY)
 @require_POST
 def api_subject_delete(request, pk):
     subject = get_object_or_404(Subject, pk=pk, department__in=departments_for(request.user))
+    try:
+        assert_writable(subject, request.user)
+    except PermissionError as exc:
+        return fail(str(exc), status=403)
+    # The push-model branch that used to sit here — "remove it from every
+    # institute at once" — is gone. A university withdraws a paper from its
+    # catalogue now, and the change reaches the colleges from there. This
+    # endpoint only ever deals with one college's own row, which
+    # `assert_writable` above has already established it may touch.
     if subject.assignments.exists() or subject.enrollments.exists():
         subject.is_active = False
         subject.save(update_fields=["is_active"])
@@ -410,34 +901,67 @@ def api_subject_delete(request, pk):
 # --------------------------------------------------------------------------- #
 #  Batches
 # --------------------------------------------------------------------------- #
-@role_required(HEAD, HOD, TEACHER, STUDENT)
+@role_required(HEAD, HOD, TEACHER, STUDENT, UNIVERSITY)
 @require_GET
 def api_batches(request):
     # The only screen that shows archived batches — it is where they are revived.
     qs = batches_for(request.user, include_inactive=True).select_related(
-        "department"
+        "department", "department__institute", "source__department__university"
     ).annotate(n_students=Count("students", distinct=True))
     dept_id = request.GET.get("department")
     if dept_id:
         qs = qs.filter(department_id=dept_id)
+    batches = list(qs)
+    states = department_states({b.department for b in batches})
     rows = [{
         "id": b.id, "label": b.label, "start_year": b.start_year, "end_year": b.end_year,
         "department": b.department.name, "department_id": b.department_id,
+        "department_code": b.department.code,
         "student_count": b.n_students, "is_active": b.is_active,
-    } for b in qs]
+        "institute": b.department.institute.code,
+        "institute_name": b.department.institute.name,
+        "discipline": b.department.discipline,
+        "discipline_label": b.department.get_discipline_display(),
+        # Who publishes it, read from the catalogue link rather than the old
+        # push-model stamp — the link *is* the claim now.
+        "owner": (b.source.department.university.short_name
+                  or b.source.department.university.name) if b.source_id else "",
+        "read_only": is_read_only(b, request.user),
+        "status": _row_status(b),
+        "state": effective_state(b),
+        "revoked": b.is_revoked,
+    } for b in batches]
     return ok({"rows": rows})
 
 
-@role_required(HEAD, HOD)
+@role_required(HEAD, HOD, UNIVERSITY)
 @require_POST
 def api_batch_save(request, pk=None):
-    dept = _scoped_department(request, request.POST.get("department") or None)
     instance = get_object_or_404(Batch, pk=pk, department__in=departments_for(request.user)) if pk else None
+    if instance is not None:
+        try:
+            assert_writable(instance, request.user)
+        except PermissionError as exc:
+            return fail(str(exc), status=403)
+    # Creating one *inside* an adopted department is refused too. The
+    # university publishes that department's cohorts; a college adding its own
+    # beside them would produce a batch nobody else running the same syllabus
+    # has, which is the disagreement the catalogue exists to prevent.
+    dept = _department_for_save(request, instance)
+    if instance is None and dept is not None and dept.source_id is not None:
+        return fail(
+            "Your affiliating university publishes the cohorts for this "
+            "department. Add batches under a department you run yourself.",
+            {"department": "Set by your university."}, status=403)
     form = BatchForm(request.POST, instance=instance)
     if not form.is_valid():
         return fail("Please correct the highlighted fields.", form_errors(form))
+    refusal = _refuse_activation_in_a_dead_department(
+        dept, form.cleaned_data.get("is_active"))
+    if refusal:
+        return fail(refusal, {"is_active": refusal})
     batch = form.save(commit=False)
-    batch.department = instance.department if instance else dept
+    batch.department = dept
     batch.start_year = form.cleaned_data["start_year"]
     batch.end_year = form.cleaned_data["end_year"]
     try:
@@ -447,7 +971,7 @@ def api_batch_save(request, pk=None):
     return ok({"id": batch.id}, message="Batch saved.")
 
 
-@role_required(HEAD, HOD)
+@role_required(HEAD, HOD, UNIVERSITY)
 @require_POST
 def api_batch_toggle(request, pk):
     """
@@ -458,8 +982,16 @@ def api_batch_toggle(request, pk):
     deleted, so restoring brings all of it straight back.
     """
     batch = get_object_or_404(Batch, pk=pk, department__in=departments_for(request.user))
+    try:
+        assert_writable(batch, request.user)
+    except PermissionError as exc:
+        return fail(str(exc), status=403)
+    # Archiving everywhere is the catalogue's job now — see
+    # `catalogue_views.api_batch_toggle`, which does reach every college
+    # running the cohort. Here it is one college's own batch.
     batch.is_active = not batch.is_active
-    batch.save(update_fields=["is_active"])
+    batch.status = RowStatus.ACTIVE if batch.is_active else RowStatus.ARCHIVED
+    batch.save(update_fields=["is_active", "status"])
     ActivityLog.log(request, action="BATCH_TOGGLED",
                     detail=f"{batch.label} {'restored' if batch.is_active else 'archived'}")
     students = batch.students.count()
@@ -471,10 +1003,14 @@ def api_batch_toggle(request, pk):
     return ok({"is_active": batch.is_active}, message=message)
 
 
-@role_required(HEAD, HOD)
+@role_required(HEAD, HOD, UNIVERSITY)
 @require_POST
 def api_batch_delete(request, pk):
     batch = get_object_or_404(Batch, pk=pk, department__in=departments_for(request.user))
+    try:
+        assert_writable(batch, request.user)
+    except PermissionError as exc:
+        return fail(str(exc), status=403)
     if batch.students.exists():
         batch.is_active = False
         batch.save(update_fields=["is_active"])
@@ -494,19 +1030,32 @@ def _assignment_rows(teacher):
         "subject": f"{a.subject.code} — {a.subject.name}",
         "subject_type": a.subject.subject_type,
         "degree": a.subject.degree,
+        # For the Semester filter. Read from the allocation rather than the
+        # teacher, who has no semester of their own — the same reading the
+        # subject-type and degree filters beside it already use.
+        "semester": a.subject.semester,
         "batch_id": a.batch_id,
         "batch": a.batch.label,
-    } for a in teacher.assignments.select_related("subject", "batch").filter(
+        # Blank means the whole batch — see academics/allocation.py. The chip
+        # prints "2022-26" for that and "2022-26 · A" for a section, so the two
+        # read differently at a glance.
+        "section_id": a.section_id,
+        "section": a.section.name if a.section_id else "",
+        # Derived, never stored. The screens show it; the row does not keep it.
+        "department": a.subject.department.code,
+    } for a in teacher.assignments.select_related(
+        "subject", "subject__department", "batch", "section").filter(
         is_active=True, batch__is_active=True)]
 
 
-@role_required(HEAD, HOD, TEACHER, STUDENT, GUARDIAN)
+@role_required(HEAD, HOD, TEACHER, STUDENT, GUARDIAN, UNIVERSITY)
 @guardian_readonly
 @require_GET
 def api_teachers(request):
     # Read scope: staff see the whole institute. Editing is decided per row by
     # `can_edit` below, and enforced independently by the write endpoints.
-    qs = visible_teachers_for(request.user).select_related("department").prefetch_related(
+    qs = visible_teachers_for(request.user).select_related(
+        "department", "suspended_by").prefetch_related(
         Prefetch("assignments", queryset=TeacherAssignment.objects.select_related("subject", "batch"))
     )
     dept_id = clean_object_id(request.GET.get("department"))
@@ -519,6 +1068,17 @@ def api_teachers(request):
     # Hiding the column client-side while still shipping the number in the JSON
     # would not be hiding it at all, so students never receive it.
     show_mobile = request.user.role not in (STUDENT, GUARDIAN)
+    # **The reason never reaches a student or a guardian.** The suspension
+    # itself is visible — a teacher who cannot sign in is a fact the directory
+    # should not hide — but why somebody was suspended is a staff matter
+    # between the university, the institute and the person. Withheld from the
+    # payload rather than hidden in the browser, because hiding it client-side
+    # would not be hiding it at all: the same mistake the mobile column above
+    # was written to avoid.
+    # Also gates the PAN and date of birth below. One flag rather than three
+    # identical ones, and named for what it decides rather than for the first
+    # thing that used it: staff-only detail about a member of staff.
+    staff_detail = show_reason = request.user.role not in (STUDENT, GUARDIAN)
     pending = {}
     if can_manage:
         pending = {
@@ -526,6 +1086,9 @@ def api_teachers(request):
             for i in Invitation.objects.filter(role=TEACHER, status=Invitation.Status.PENDING,
                                                institute=request.user.institute)
         }
+    teachers = list(qs)
+    states = department_states(
+        {t.department for t in teachers if t.department_id})
     rows = [{
         "id": t.id,
         "full_name": t.full_name or "(awaiting registration)",
@@ -533,19 +1096,55 @@ def api_teachers(request):
         "phone": t.phone if show_mobile else "",
         "phone_dial": dial(t.phone) if show_mobile else None,
         "department": t.department.name if t.department else "",
-        "department_id": t.department_id,      # the client filters on this
-        "status": "active" if t.registration_completed else "invited",
+        "department_id": t.department_id,
+        "institute": t.institute.code if t.institute else "",      # the client filters on this
+        "institute_name": t.institute.name if t.institute else "",
+        "discipline": t.department.discipline if t.department_id else "",
+        "discipline_label": (t.department.get_discipline_display()
+                             if t.department_id else ""),
+        "status": _row_status(t),
+        "state": effective_state(t),
+        "revoked": t.is_revoked,
         "is_active": t.is_active,
+        # Masked, and only for staff. A PAN is a national identifier; the
+        # table needs it to say "this row is identified" and to let somebody
+        # spot a duplicate, neither of which needs the whole number.
+        "pan": pan_rules.masked(t.pan_number) if staff_detail else "",
+        "has_pan": bool(t.pan_number),
+        "date_of_birth": (t.date_of_birth.strftime("%d %b %Y")
+                          if t.date_of_birth and staff_detail else ""),
+        "date_of_birth_value": (t.date_of_birth.isoformat()
+                                if t.date_of_birth and staff_detail else ""),
+        "suspended": t.is_suspended,
+        "suspension_reason": t.suspension_reason if show_reason else "",
+        # Date *and* time. "Suspended on 13 Aug" is ambiguous on the day it
+        # happens, which is the day somebody is most likely to be asking.
+        "suspended_at": (localtime(t.suspended_at).strftime("%d %b %Y, %H:%M")
+                         if t.suspended_at else ""),
+        "suspended_by": ((t.suspended_by.short_name or t.suspended_by.name)
+                         if t.suspended_by_id else ""),
+        # Mirrors `suspension.may_suspend`, so the button the browser shows
+        # matches what the server will actually accept. False for an institute
+        # throughout — this is not their decision to take.
+        "can_suspend": can_suspend(request.user, t),
+        "can_lift": (request.user.is_university
+                     and t.is_suspended
+                     and t.suspended_by_id == request.user.university_id),
         # Mirrors what teachers_for() would allow, so the buttons the browser
         # shows match what the server will actually accept.
-        "can_edit": can_manage and (manageable is None or t.department_id in manageable),
+        # Mirrors the two guards above, so a locked row shows as locked rather
+        # than offering buttons that come back 403.
+        "can_edit": (can_manage
+                     and (manageable is None or t.department_id in manageable)
+                     and suspension.may_manage(request.user, t)),
+        "frozen": t.is_suspended and not request.user.is_university,
         "invitation_id": pending.get(t.email),
         "assignments": _assignment_rows(t),
-    } for t in qs]
+    } for t in teachers]
     return ok({"rows": rows})
 
 
-@role_required(HEAD, HOD)
+@role_required(HEAD, HOD, UNIVERSITY)
 @require_POST
 def api_teacher_invite(request):
     dept = _scoped_department(request, request.POST.get("department") or None)
@@ -560,21 +1159,25 @@ def api_teacher_invite(request):
         return fail("Assign at least one subject + batch to the teacher.",
                     {"assignments": "Pick at least one subject and batch."})
 
-    # The browser sends ids as 24-char hex strings; the database returns
-    # ObjectIds, and the two are never equal — so key the lookups by str().
-    # Junk is dropped here rather than in the queryset, because
-    # ObjectIdAutoField raises ValidationError instead of simply not matching.
-    subject_ids = set(clean_object_ids(p.get("subject_id") for p in pairs))
-    batch_ids = set(clean_object_ids(p.get("batch_id") for p in pairs))
-    subjects = {str(s.id): s for s in Subject.objects.filter(
-        id__in=subject_ids, department=dept)}
-    batches = {str(b.id): b for b in Batch.objects.filter(
-        id__in=batch_ids, department=dept, is_active=True)}
-    if (len(subjects) != len(subject_ids) or len(batches) != len(batch_ids)
-            or len(subject_ids) != len({p.get("subject_id") for p in pairs})
-            or len(batch_ids) != len({p.get("batch_id") for p in pairs})):
-        return fail("One of the selected subjects or batches is not in your department, "
-                    "or the batch is archived.", status=403)
+    # Subject + batch + section, validated against this department in one
+    # place — `academics.allocation.resolve_pairs`. Both this endpoint and the
+    # edit one below call it, so an allocation cannot mean one thing when a
+    # teacher is invited and another when they are edited.
+    resolved, pair_error = allocation.resolve_pairs(pairs, dept)
+    if pair_error:
+        return fail(pair_error, status=403)
+
+    # **Before the account exists, not after.** The gate ends in a call to an
+    # external provider, and half-creating a teacher and then discovering their
+    # PAN is spoken for would leave a row nobody asked for. `exclude_pk` is not
+    # passed: there is no row yet, so every holder counts.
+    try:
+        pan = pan_rules.assert_can_hold(
+            pan=form.cleaned_data["pan_number"],
+            name=form.cleaned_data["full_name"],
+            date_of_birth=form.cleaned_data["date_of_birth"])
+    except pan_rules.PanError as exc:
+        return fail(str(exc), {exc.field: str(exc)}, status=403)
 
     with transaction.atomic():
         user, invitation, _ = invite_user(
@@ -586,28 +1189,35 @@ def api_teacher_invite(request):
             invited_by=request.user,
             payload={"assignments": pairs},
             extra_lines=["Assigned: " + ", ".join(
-                f"{subjects[p['subject_id']].code} · {batches[p['batch_id']].label}"
-                for p in pairs
+                f"{subject.code} · {batch.label}"
+                + (f" · {section.name}" if section else "")
+                for subject, batch, section in resolved
             )],
         )
         if invitation is None and not user.is_teacher:
             return fail("That email already belongs to a non-teacher account.")
+        # Recorded on the row the invite created or reused. Reusing a row that
+        # already carries a *different* PAN would be re-identifying somebody,
+        # so it is refused rather than overwritten.
+        if user.pan_number and user.pan_number != pan:
+            return fail(
+                f"{user.email} is already on file with a different PAN. "
+                "Archive that account and add the teacher again if this is a "
+                "different person.", {"email": "Already has another PAN."},
+                status=403)
+        pan_rules.record(user, pan=pan,
+                         date_of_birth=form.cleaned_data["date_of_birth"],
+                         actor=request.user)
         if form.cleaned_data.get("phone"):
             user.phone = form.cleaned_data["phone"]
             user.save(update_fields=["phone"])
-        for p in pairs:
-            TeacherAssignment.objects.update_or_create(
-                teacher=user,
-                subject=subjects[p["subject_id"]],
-                batch=batches[p["batch_id"]],
-                defaults={"assigned_by": request.user, "is_active": True},
-            )
+        allocation.set_allocations(user, resolved, actor=request.user)
     ActivityLog.log(request, action="TEACHER_INVITED", detail=user.email)
     note = " Invitation emailed." if invitation else " (Account already active — assignments updated.)"
     return ok({"id": user.id}, message="Teacher saved." + note)
 
 
-@role_required(HEAD, HOD)
+@role_required(HEAD, HOD, UNIVERSITY)
 @require_POST
 def api_teacher_assignments_save(request, pk):
     """
@@ -618,6 +1228,11 @@ def api_teacher_assignments_save(request, pk):
     department" true regardless of what the browser sends.
     """
     teacher = get_object_or_404(teachers_for(request.user), pk=pk)
+    # A suspended teacher's record is evidence while the sanction stands, and
+    # is not the institute's to amend. Checked before anything is read off the
+    # request so a refusal cannot depend on what was posted.
+    if not suspension.may_manage(request.user, teacher):
+        return fail(suspension.manage_refusal(teacher), status=403)
     is_head = request.user.role == HEAD
 
     dept = teacher.department or _scoped_department(request)
@@ -649,11 +1264,34 @@ def api_teacher_assignments_save(request, pk):
                         {"phone": f"That mobile number {phone_error}."})
         phone = normalised or phone
 
+    # PAN and date of birth are fixed once on file — they are the answer to
+    # "who is this person", and a screen that could edit them could move a
+    # teacher's history onto somebody else. A row that predates this carries
+    # neither, and filling them in is the only way it ever gets one; that path
+    # runs the full gate, including the KYC call.
+    posted_pan = (request.POST.get("pan_number") or "").strip()
+    posted_dob = (request.POST.get("date_of_birth") or "").strip()
+    dob = parse_date(posted_dob) if posted_dob else None
+    try:
+        pan_rules.assert_immutable(teacher, pan=posted_pan, date_of_birth=dob)
+        filling_in = posted_pan and not teacher.pan_number
+        if filling_in:
+            pan_rules.assert_can_hold(
+                pan=posted_pan, name=full_name or teacher.full_name,
+                date_of_birth=dob, exclude_pk=teacher.pk)
+    except pan_rules.PanError as exc:
+        return fail(str(exc), {exc.field: str(exc)}, status=403)
+
     try:
         pairs = json.loads(request.POST.get("assignments") or "[]")
     except ValueError:
         return fail("Assignments payload is malformed.")
-    keep = set()
+    # Resolved before the transaction opens: a bad payload should refuse
+    # without having half-written a name change.
+    resolved, pair_error = allocation.resolve_pairs(pairs, dept)
+    if pair_error:
+        return fail(pair_error, status=403)
+
     with transaction.atomic():
         changed = []
         if full_name and full_name != teacher.full_name:
@@ -665,33 +1303,42 @@ def api_teacher_assignments_save(request, pk):
         if dept and teacher.department_id != dept.pk:
             teacher.department = dept
             changed.append("department")
+        if filling_in:
+            teacher.pan_number = pan_rules.normalise(posted_pan)
+            teacher.date_of_birth = dob
+            changed += ["pan_number", "date_of_birth"]
         if changed:
             teacher.save(update_fields=changed)
-        for p in pairs:
-            subject = get_object_or_404(
-                Subject, pk=clean_object_id(p.get("subject_id")) or "", department=dept)
-            batch = get_object_or_404(
-                Batch, pk=clean_object_id(p.get("batch_id")) or "",
-                department=dept, is_active=True)
-            obj, _ = TeacherAssignment.objects.update_or_create(
-                teacher=teacher, subject=subject, batch=batch,
-                defaults={"assigned_by": request.user, "is_active": True},
-            )
-            keep.add(obj.id)
-        # Anything not resubmitted is retired. This also cleans up after a
-        # department move: allocations to the old department's subjects are not
-        # in `pairs` (they could not be, they are validated against `dept`), so
-        # they deactivate here rather than lingering as invalid cross-department
-        # links.
-        TeacherAssignment.objects.filter(teacher=teacher).exclude(id__in=keep).update(is_active=False)
+        # Anything not resubmitted is retired — see `set_allocations`. That
+        # also cleans up after a department move: allocations to the old
+        # department's subjects cannot be in `pairs`, since `resolve_pairs`
+        # validates against `dept`, so they deactivate rather than lingering as
+        # invalid cross-department links.
+        allocation.set_allocations(teacher, resolved, actor=request.user)
     ActivityLog.log(request, action="TEACHER_UPDATED", detail=teacher.email)
     return ok({"assignments": _assignment_rows(teacher)}, message="Teacher updated.")
 
 
-@role_required(HEAD, HOD)
+@role_required(HEAD, HOD, UNIVERSITY)
 @require_POST
 def api_teacher_toggle(request, pk):
     teacher = get_object_or_404(teachers_for(request.user), pk=pk)
+    # **Frozen in both directions.** Re-activating would put them back on the
+    # rota with the bar still standing. Deactivating is refused for a sharper
+    # reason: archiving releases the PAN, so a college able to archive a
+    # suspended teacher could hand them to the next college and the sanction
+    # would follow nobody. See accounts/suspension.may_manage.
+    if not suspension.may_manage(request.user, teacher):
+        return fail(suspension.manage_refusal(teacher), status=403)
+    # Reactivation asks the PAN question from the other end: while this teacher
+    # was archived another college may have taken them on, and switching them
+    # back on here would put one person on two payrolls. Archiving is never
+    # blocked — releasing somebody is always allowed.
+    if not teacher.is_active:
+        try:
+            pan_rules.assert_can_reactivate(teacher)
+        except pan_rules.PanError as exc:
+            return fail(str(exc), {exc.field: str(exc)}, status=403)
     teacher.is_active = not teacher.is_active
     teacher.save(update_fields=["is_active"])
     state = "re-activated" if teacher.is_active else "deactivated"
@@ -699,24 +1346,83 @@ def api_teacher_toggle(request, pk):
     return ok({"is_active": teacher.is_active}, message=f"{teacher.email} {state}.")
 
 
+@role_required(UNIVERSITY)
+@require_POST
+def api_teacher_suspend(request, pk):
+    """
+    Suspend a teacher of an institute this university affiliates.
+
+    Scoped by `visible_teachers_for` first — a university may only reach the
+    institutes it affiliates at all — and then by `suspension.may_suspend`,
+    which narrows it to the ones whose *department's discipline* is this
+    university's. The two are not the same test, and the second is the one that
+    matters: a college with engineering under one body and pharmacy under
+    another has two affiliating universities.
+    """
+    teacher = get_object_or_404(visible_teachers_for(request.user), pk=pk)
+    try:
+        result = suspension.suspend(teacher=teacher,
+                                    reason=request.POST.get("reason"),
+                                    actor=request.user)
+    except suspension.SuspensionError as exc:
+        return fail(str(exc), status=403)
+
+    told = len(result["notified"])
+    return ok(result, message=(
+        f"{teacher.get_full_name()} suspended. "
+        + (f"The teacher, their head of department and the institute were "
+           f"emailed ({told} address(es))." if told else
+           "No deliverable address was on file, so nobody could be emailed — "
+           "tell them another way.")))
+
+
+@role_required(UNIVERSITY)
+@require_POST
+def api_teacher_lift_suspension(request, pk):
+    """Clear a suspension. Only the body that imposed it may do so."""
+    teacher = get_object_or_404(visible_teachers_for(request.user), pk=pk)
+    try:
+        result = suspension.lift(teacher=teacher,
+                                 reason=request.POST.get("reason"),
+                                 actor=request.user)
+    except suspension.SuspensionError as exc:
+        return fail(str(exc), status=403)
+    return ok(result, message=(
+        f"Suspension on {teacher.get_full_name()} lifted. They can sign in "
+        "again, and their classes and attendance are as they left them."))
+
+
 # --------------------------------------------------------------------------- #
 #  Students
 # --------------------------------------------------------------------------- #
-@role_required(HEAD, HOD, TEACHER)
+@role_required(HEAD, HOD, TEACHER, UNIVERSITY)
 @require_GET
 def api_students(request):
     # `scope=all` is the institute-wide directory. all_students_for() returns
     # nothing for a student account, so the parameter cannot widen anyone's
     # access beyond what their role already allows.
     wide = request.GET.get("scope") == "all"
-    base = all_students_for(request.user) if wide else students_qs_for(request.user)
-    qs = base.select_related("user", "batch", "department").prefetch_related(
+    # The management screen, so archived and revoked departments are included:
+    # listing those students with the right status is what the status column is
+    # for. Reports use the same selectors with the default and get neither.
+    base = (all_students_for(request.user, include_dead_departments=True) if wide
+            else students_qs_for(request.user, include_dead_departments=True))
+    qs = base.select_related(
+        "user", "batch", "section", "department",
+        "department__institute").prefetch_related(
         Prefetch("enrollments", queryset=Enrollment.objects.filter(is_active=True).select_related("subject"))
     )
     if request.GET.get("department"):
         qs = qs.filter(department_id=request.GET["department"])
     if request.GET.get("batch"):
         qs = qs.filter(batch_id=request.GET["batch"])
+    # `none` is a real answer, not a missing filter: "who has not been put in a
+    # section yet" is the question a head asks straight after an import.
+    section = (request.GET.get("section") or "").strip()
+    if section == "none":
+        qs = qs.filter(section__isnull=True)
+    elif section:
+        qs = qs.filter(section_id=section)
     if request.GET.get("subject"):
         qs = qs.filter(enrollments__subject_id=request.GET["subject"], enrollments__is_active=True)
     search = (request.GET.get("q") or "").strip()
@@ -727,6 +1433,8 @@ def api_students(request):
             | Q(class_roll__icontains=search)
             | Q(exam_roll__icontains=search)
         )
+    students = list(qs.distinct()[:2000])
+    states = department_states({s.department for s in students})
     rows = [{
         "id": s.id,
         "user_id": s.user_id,
@@ -742,8 +1450,14 @@ def api_students(request):
         "exam_roll": s.exam_roll,
         "batch": s.batch.label,
         "batch_id": s.batch_id,
+        "section": s.section.name if s.section_id else "",
+        "section_id": s.section_id,
         "department": s.department.name,
         "department_id": s.department_id,
+        "institute": s.department.institute.code,
+        "institute_name": s.department.institute.name,
+        "discipline": s.department.discipline,
+        "discipline_label": s.department.get_discipline_display(),
         "subjects": [e.subject.code for e in s.enrollments.all()],
         # Code -> type, so the subject dropdown on this screen can group itself.
         # It is built from the rows rather than from api_lookups because this
@@ -752,7 +1466,9 @@ def api_students(request):
                           for e in s.enrollments.all()},
         "subject_degrees": {e.subject.code: e.subject.degree
                             for e in s.enrollments.all()},
-        "status": "active" if s.user.registration_completed else "invited",
+        "status": _row_status(s),
+        "state": effective_state(s),
+        "revoked": s.is_revoked,
         "is_active": s.is_active and s.user.is_active,
         "device_bound": bool(s.user.device_id),
         "device_bound_at": (
@@ -762,14 +1478,25 @@ def api_students(request):
         # The gate is hard, so staff need to see at a glance who is stuck
         # behind it and have the reset button to hand.
         "face_enrolled": bool(s.user.face_enrolled),
-    } for s in qs.distinct()[:2000]]
+    } for s in students]
     return ok({"rows": rows, "count": len(rows)})
 
 
-@role_required(HEAD, HOD)
+@role_required(HEAD, HOD, UNIVERSITY)
 @require_POST
 def api_students_import(request):
-    dept = _scoped_department(request, request.POST.get("department") or None)
+    # **No department argument any more.** It is a column in the sheet, so one
+    # file can carry the whole college. What the caller supplies instead is the
+    # scope: which institute, and which of its departments this account may
+    # file students into — without that second half a Department column would
+    # let a HoD put students in a department they do not run.
+    institute = _target_institute(request)
+    if institute is None:
+        return fail("No institute is selected.", status=403)
+    allowed = departments_for(request.user)
+    if not allowed.exists():
+        return fail("You do not manage any department to import into.",
+                    status=403)
     upload = request.FILES.get("file")
     if upload is None:
         return fail("Please choose a spreadsheet to upload.", {"file": "This field is required."})
@@ -792,7 +1519,9 @@ def api_students_import(request):
         preview = {}
         try:
             with transaction.atomic():
-                job = import_students(rows, dept, request.user, upload.name, send_invites=False)
+                job = import_students(
+                    rows, institute, request.user, upload.name,
+                    send_invites=False, allowed_departments=allowed)
                 preview = {
                     "counts": {
                         "total": job.total_rows, "created": job.created_count,
@@ -806,9 +1535,12 @@ def api_students_import(request):
         return ok({"preview": True, **preview},
                   message="Preview only — nothing has been saved yet.")
 
-    job = import_students(rows, dept, request.user, upload.name, send_invites=True)
-    ActivityLog.log(request, action="STUDENTS_IMPORTED",
-                    detail=f"{job.created_count} created / {job.updated_count} updated")
+    job = import_students(rows, institute, request.user, upload.name,
+                          send_invites=True, allowed_departments=allowed)
+    ActivityLog.log(
+        request, action="STUDENTS_IMPORTED",
+        detail=(f"{job.created_count} created / {job.updated_count} updated"
+                f" · {', '.join(job.report.get('departments') or []) or 'none'}"))
     return ok({
         "job_id": job.id,
         "counts": {
@@ -822,7 +1554,7 @@ def api_students_import(request):
     ))
 
 
-@role_required(HEAD, HOD)
+@role_required(HEAD, HOD, UNIVERSITY)
 @require_GET
 def api_students_template(request):
     dept = current_department(request.user)
@@ -833,15 +1565,29 @@ def api_students_template(request):
     )
 
 
-@role_required(HEAD, HOD)
+@role_required(HEAD, HOD, UNIVERSITY)
 @require_GET
 def api_import_jobs(request):
-    qs = ImportJob.objects.filter(department__in=departments_for(request.user)).select_related(
-        "uploaded_by", "department"
+    # Scoped by institute, because a job is not one department's any more. The
+    # `department` half of the filter is kept for the jobs uploaded before the
+    # column existed, which carry a department and no institute — dropping it
+    # would make that history vanish from the screen.
+    from accounts.scoping import institutes_for
+
+    scope = Q(institute__in=institutes_for(request.user))
+    dept_ids = list(departments_for(request.user).values_list("id", flat=True))
+    if dept_ids:
+        scope |= Q(department_id__in=dept_ids)
+    qs = ImportJob.objects.filter(scope).select_related(
+        "uploaded_by", "department", "institute"
     )[:50]
     rows = [{
         "id": j.id, "file_name": j.file_name, "status": j.status,
-        "department": j.department.name,
+        # The departments a file actually reached, from the report. Falls back
+        # to the single department an older job recorded.
+        "department": (", ".join(j.report.get("departments") or [])
+                       or (j.department.name if j.department_id else "—")),
+        "institute": j.institute.name if j.institute_id else "",
         "uploaded_by": j.uploaded_by.full_name if j.uploaded_by else "",
         "total": j.total_rows, "created": j.created_count,
         "updated": j.updated_count, "errors": j.error_count,
@@ -850,14 +1596,23 @@ def api_import_jobs(request):
     return ok({"rows": rows})
 
 
-@role_required(HEAD, HOD)
+@role_required(HEAD, HOD, UNIVERSITY)
 @require_GET
 def api_import_job_detail(request, pk):
-    job = get_object_or_404(ImportJob, pk=pk, department__in=departments_for(request.user))
-    return ok({"rows": job.report.get("rows", [])})
+    from accounts.scoping import institutes_for
+
+    # Same two-part scope as the list above — see the note there.
+    scope = Q(institute__in=institutes_for(request.user))
+    dept_ids = list(departments_for(request.user).values_list("id", flat=True))
+    if dept_ids:
+        scope |= Q(department_id__in=dept_ids)
+    job = get_object_or_404(ImportJob.objects.filter(scope), pk=pk)
+    return ok({"rows": job.report.get("rows", []),
+               "sections_created": job.report.get("sections_created", []),
+               "departments": job.report.get("departments", [])})
 
 
-@role_required(HEAD, HOD)
+@role_required(HEAD, HOD, UNIVERSITY)
 @require_POST
 def api_student_save(request, pk):
     student = get_object_or_404(students_qs_for(request.user), pk=pk)
@@ -868,7 +1623,24 @@ def api_student_save(request, pk):
         Batch, pk=form.cleaned_data["batch_id"],
         department=student.department, is_active=True,
     )
+    # Resolved against the batch being *saved*, not the one the student is
+    # leaving — otherwise moving somebody between cohorts and setting their
+    # section in one go checks against the wrong list and lets a mismatch
+    # through. `create=False`: a typo on a form should be refused, not become a
+    # fourth section. Sections are created by an import, which is where a
+    # spreadsheet is the source of truth.
+    posted_section = (request.POST.get("section_id") or "").strip()
+    try:
+        if posted_section:
+            section = get_object_or_404(Section, pk=clean_object_id(posted_section))
+            sections.assert_in_batch(section, batch)
+        else:
+            section = None
+    except sections.SectionError as exc:
+        return fail(str(exc), {"section_id": str(exc)})
+
     student.batch = batch
+    student.section = section
     student.mobile = form.cleaned_data.get("mobile", "")
     student.class_roll = form.cleaned_data.get("class_roll", "")
     student.exam_roll = form.cleaned_data.get("exam_roll", "")
@@ -881,9 +1653,16 @@ def api_student_save(request, pk):
 
     subject_ids = clean_object_ids(request.POST.getlist("subjects[]"))
     if subject_ids:
-        valid = Subject.objects.filter(id__in=subject_ids, department=student.department)
+        valid = list(Subject.objects.filter(
+            id__in=subject_ids, department=student.department))
+        # Materialised for the same reason as
+        # `accounts.affiliations.archive_discipline_contents`: passing a
+        # queryset here is a correlated subquery, and django_mongodb_backend
+        # cannot express one inside an `update()` — Atlas rejects it with
+        # "$in requires an array as a second argument, found: missing".
+        # sqlite runs it, so no test catches it; only a real save does.
         Enrollment.objects.filter(student=student).exclude(
-            subject__in=valid
+            subject_id__in=[s.pk for s in valid]
         ).update(is_active=False)
         for subj in valid:
             Enrollment.objects.update_or_create(
@@ -892,7 +1671,7 @@ def api_student_save(request, pk):
     return ok(message="Student updated.")
 
 
-@role_required(HEAD, HOD)
+@role_required(HEAD, HOD, UNIVERSITY)
 @require_POST
 def api_student_toggle(request, pk):
     student = get_object_or_404(students_qs_for(request.user), pk=pk)
@@ -904,7 +1683,7 @@ def api_student_toggle(request, pk):
     return ok({"is_active": student.is_active}, message=f"{student.user.email} {state}.")
 
 
-@role_required(HEAD, HOD, TEACHER)
+@role_required(HEAD, HOD, TEACHER, UNIVERSITY)
 @require_POST
 def api_student_reset_device(request, pk):
     """
@@ -927,7 +1706,7 @@ def api_student_reset_device(request, pk):
     )
 
 
-@role_required(HEAD, HOD, TEACHER)
+@role_required(HEAD, HOD, TEACHER, UNIVERSITY)
 @require_GET
 def api_student_face(request, pk):
     """
@@ -961,7 +1740,7 @@ def api_student_face(request, pk):
     })
 
 
-@role_required(HEAD, HOD, TEACHER)
+@role_required(HEAD, HOD, TEACHER, UNIVERSITY)
 @require_GET
 def api_student_face_image(request, pk, pose):
     """
@@ -984,7 +1763,7 @@ def api_student_face_image(request, pk, pose):
     return response
 
 
-@role_required(HEAD, HOD, TEACHER)
+@role_required(HEAD, HOD, TEACHER, UNIVERSITY)
 @require_POST
 def api_student_reset_face(request, pk):
     """
@@ -1009,7 +1788,7 @@ def api_student_reset_face(request, pk):
     )
 
 
-@role_required(HEAD, HOD)
+@role_required(HEAD, HOD, UNIVERSITY)
 @require_POST
 def api_student_resend(request, pk):
     student = get_object_or_404(students_qs_for(request.user), pk=pk)
@@ -1028,17 +1807,28 @@ def api_student_resend(request, pk):
     return ok(message=f"Invitation re-sent to {student.user.email}.")
 
 
-@role_required(HEAD, HOD, TEACHER)
+@role_required(HEAD, HOD, TEACHER, UNIVERSITY)
 @require_GET
 def api_students_export(request):
     """Download the current roster in the same shape the importer accepts."""
-    qs = students_qs_for(request.user).select_related("user", "batch").prefetch_related(
+    # `department__institute` for the Institute column the export now carries —
+    # without it this was one extra query per student.
+    qs = students_qs_for(request.user).select_related(
+        "user", "batch", "section", "department", "department__institute"
+    ).prefetch_related(
         Prefetch("enrollments", queryset=Enrollment.objects.filter(is_active=True).select_related("subject"))
     )
     if request.GET.get("department"):
         qs = qs.filter(department_id=request.GET["department"])
     if request.GET.get("batch"):
         qs = qs.filter(batch_id=request.GET["batch"])
+    # The export mirrors the table's filters, so "what I am looking at" and
+    # "what I download" are the same list.
+    section = (request.GET.get("section") or "").strip()
+    if section == "none":
+        qs = qs.filter(section__isnull=True)
+    elif section:
+        qs = qs.filter(section_id=section)
     if request.GET.get("subject"):
         qs = qs.filter(enrollments__subject_id=request.GET["subject"], enrollments__is_active=True)
     stream = build_roster_workbook(qs.distinct())
@@ -1051,11 +1841,14 @@ def api_students_export(request):
 # --------------------------------------------------------------------------- #
 #  Shared lookups used by every dropdown in the UI
 # --------------------------------------------------------------------------- #
-@role_required(HEAD, HOD, TEACHER, STUDENT)
+@role_required(HEAD, HOD, TEACHER, STUDENT, UNIVERSITY)
 @require_GET
 def api_lookups(request):
     user = request.user
-    depts = [{"id": d.id, "name": d.name, "code": d.code} for d in departments_for(user)]
+    # Every dropdown in the browser is built from this, so filtering here is
+    # what keeps archived and revoked departments out of all of them at once.
+    depts = [{"id": d.id, "name": d.name, "code": d.code}
+             for d in live_departments(departments_for(user))]
     batches = [{"id": b.id, "label": b.label, "department_id": b.department_id}
                for b in batches_for(user).select_related("department")]
     subjects = [{"id": s.id, "code": s.code, "name": s.name,
@@ -1063,11 +1856,16 @@ def api_lookups(request):
                  "degree": s.degree,
                  "semester": s.semester}
                 for s in subjects_for(user)]
+    # Live sections of every batch above, so the allocation picker can narrow
+    # to one batch in the browser without a second request per batch.
+    section_rows = [{"id": s.id, "name": s.name, "batch_id": s.batch_id}
+                    for s in sections.for_user(user)]
     teachers = []
     if user.role in (HEAD, HOD):
         teachers = [{"id": t.id, "name": t.full_name or t.email} for t in teachers_for(user)]
     return ok({
         "departments": depts, "batches": batches, "subjects": subjects,
+        "sections": section_rows,
         "teachers": teachers, "role": user.role,
         # Sent with the lookups so a dropdown built in the browser groups by
         # the same list, in the same order, as one rendered server-side.

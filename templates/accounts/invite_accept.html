@@ -38,14 +38,70 @@
         <form id="invite-form" novalidate>
           {% csrf_token %}
           <input type="hidden" name="device_hash" id="device-hash">
+          {% if is_head_invite %}
+          <!--
+            A head accepting a university's invitation fills in the institute
+            too. State and district are shown as text, not inputs: the
+            university placed this institute, and an input that is not rendered
+            cannot be posted — a disabled one is only a suggestion.
+          -->
+          <div class="alert alert-light border fs-13">
+            <i class="fa-solid fa-location-dot text-primary me-2"></i>
+            <b>{{ invitation.institute.name }}</b> —
+            {{ invitation.institute.district }}{% if invitation.institute.district and invitation.institute.state %}, {% endif %}{{ invitation.institute.state }}.
+            Set by {{ invitation.institute.invited_by }}; contact them if it is wrong.
+          </div>
+          <div class="row g-3 mb-3">
+            <div class="col-md-6">
+              <label class="form-label">Official institute email *</label>
+              <input type="email" class="form-control" name="institute_email"
+                     value="{{ invitation.institute.email }}" required>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Institute phone</label>
+              <input class="form-control" name="phone">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Website</label>
+              <input type="url" class="form-control" name="website">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Address</label>
+              <textarea class="form-control" name="address" rows="1"></textarea>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Your full name *</label>
+              <input class="form-control" name="full_name"
+                     value="{{ invitation.full_name }}" required autofocus>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Your mobile</label>
+              <input class="form-control" name="phone_head" placeholder="+91 90000 00000">
+            </div>
+          </div>
+          {% else %}
+          <!--
+            A teacher is shown their name, not asked for it: their institute
+            typed it and the KYC check verified it against their PAN. The field
+            is `disabled` so nothing is posted, and the form drops it on the
+            server too — see accounts/forms.InviteAcceptForm.
+          -->
           <div class="mb-3">
-            <label class="form-label">Full name *</label>
-            <input class="form-control" name="full_name" value="{{ invitation.full_name }}" required autofocus>
+            <label class="form-label">Full name{% if not is_teacher_invite %} *{% endif %}</label>
+            <input class="form-control" name="full_name" value="{{ invitation.full_name }}"
+                   {% if is_teacher_invite %}disabled{% else %}required autofocus{% endif %}>
+            {% if is_teacher_invite %}
+            <div class="form-text">
+              Verified against your PAN by {{ invitation.institute.name }}. Ask
+              them to correct it if it is wrong.
+            </div>
+            {% endif %}
           </div>
           <div class="mb-3">
             <label class="form-label">Mobile number</label>
             <input class="form-control" name="phone" placeholder="+91 90000 00000">
           </div>
+          {% endif %}
           <div class="mb-3">
             <label class="form-label">Create password *</label>
             <input type="password" class="form-control" name="password1" required>

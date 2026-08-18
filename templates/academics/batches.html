@@ -2,7 +2,9 @@
 {% block page_title %}Batches{% endblock %}
 {% block page_sub %}Admission cohorts such as 2022-26. Created automatically when you import students too.{% endblock %}
 {% block topbar_actions %}
+{% if can_add %}
 <button class="btn btn-primary btn-sm" id="btn-new"><i class="fa-solid fa-plus me-1"></i>New batch</button>
+{% endif %}
 {% endblock %}
 
 {% block content %}
@@ -17,11 +19,31 @@
   </div>
 </div>
 
+{% if not can_add %}
+<div class="alert alert-warning fs-13 d-flex gap-2">
+  <i class="fa-solid fa-lock mt-1"></i>
+  <div>
+    Every department you run was adopted from your affiliating university, so
+    it publishes the cohorts for them. You can add batches once you have a
+    department of your own — an autonomous discipline, or one you created
+    before affiliating.
+  </div>
+</div>
+{% endif %}
+
 <div class="card mb-3"><div class="card-body py-3 table-toolbar">
   <div class="input-group input-group-sm" style="max-width:280px">
     <span class="input-group-text"><i class="fa-solid fa-magnifying-glass"></i></span>
     <input class="form-control" id="search" placeholder="Search batches…">
   </div>
+  {% include "partials/institute_filter.html" with id="f-institute" %}
+  <select class="form-select form-select-sm" id="dept-filter" style="max-width:230px">
+    <option value="">All departments</option>
+    {% for d in filter_departments %}
+    <option value="{{ d.id }}">{{ d.name }}{% if not d.is_active %} (archived){% endif %}</option>
+    {% endfor %}
+  </select>
+  {% include "partials/discipline_filter.html" with id="f-discipline-filter" %}
   <button class="btn btn-light btn-sm ms-auto" id="btn-refresh"><i class="fa-solid fa-rotate"></i></button>
 </div></div>
 
@@ -35,9 +57,27 @@
       <input type="hidden" id="rec-id">
       {% if user.is_head %}
       <div class="mb-3"><label class="form-label">Department *</label>
+        <!--
+          Only departments this institute runs itself. Cohorts in a department
+          adopted from a university come from that university's catalogue, and
+          the save endpoint refuses one created here — see
+          academics/curriculum.own_departments.
+        -->
         <select class="form-select" name="department" required>
-          {% for d in departments %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}
-        </select></div>
+          {% for d in departments %}<option value="{{ d.id }}">{{ d.name }} ({{ d.code }})</option>{% endfor %}
+        </select>
+        <!--
+          Editable on edit as well as on create. Before, the department was
+          fixed once set, which left a batch stranded in a revoked department
+          with no way out. Moving it here honours the Active checkbox below:
+          ticked lands it active, unticked lands it archived.
+        -->
+        <div class="form-text">
+          Departments you run yourself. Cohorts for a department your
+          university publishes are set by them and appear here read-only.
+          Moving this batch applies the Active setting below on arrival.
+        </div>
+      </div>
       {% endif %}
       <div class="mb-3"><label class="form-label">Batch label *</label>
         <input class="form-control" name="label" placeholder="2022-26" required>
@@ -61,15 +101,24 @@ $(function(){
   const cols = [
     { key:"label", label:"Batch", render:v=>'<span class="fw-600 fs-6">'+GA.esc(v)+'</span>' },
     { key:"department", label:"Department" },
+    GA.instituteCol(null, {always:true}),
+    GA.disciplineCol(),
+    { key:"owner", label:"Set by", render:v=> v
+        ? '<span class="ga-pill pill-violet" title="Set by your affiliating university — read-only here">'+
+          '<i class="fa-solid fa-lock me-1"></i>'+GA.esc(v)+'</span>'
+        : '<span class="text-muted-2">This institute</span>' },
     { key:"start_year", label:"Starts", className:"text-center" },
     { key:"end_year", label:"Ends", className:"text-center" },
     { key:"student_count", label:"Students", className:"text-center",
       render:v=>'<span class="ga-pill pill-blue">'+v+'</span>' },
-    { key:"is_active", label:"Status", render:v=> v
-        ? '<span class="ga-pill pill-green"><i class="fa-solid fa-circle-check"></i>Active</span>'
-        : '<span class="ga-pill pill-grey"><i class="fa-solid fa-box-archive"></i>Archived</span>' },
+    /* One shared cell: Revoked leads, status follows. See GA.statusCol. */
+    GA.statusCol(),
+    /* Read-only for an affiliated institute — see subjects.html for the note. */
     { key:"id", label:"", sortable:false, className:"text-end", render:(v,r)=>
-      '<div class="btn-group btn-group-sm">'+
+      r.read_only
+        ? '<span class="text-muted-2 fs-13" title="Ask '+GA.esc(r.owner)+' to amend it">'+
+          '<i class="fa-solid fa-lock me-1"></i>Read-only</span>'
+        : '<div class="btn-group btn-group-sm">'+
       '<button class="btn btn-light edit" data-id="'+v+'" title="Edit"><i class="fa-solid fa-pen"></i></button>'+
       '<button class="btn btn-light toggle '+(r.is_active?'text-warning':'text-success')+
       '" data-id="'+v+'" data-name="'+GA.esc(r.label)+'" data-active="'+(r.is_active?1:0)+
@@ -105,13 +154,21 @@ $(function(){
         .done(()=> GA.post("/manage/api/batches/"+id+"/delete/").done(load));
     });
   }
+  function applyFilters(){
+    const d = $("#dept-filter").val(), disc = $("#f-discipline-filter").val();
+    table.setRows(rows.filter(r =>
+      (!d || r.department_id == d) && (!disc || r.discipline === disc)));
+    bind();
+  }
+  $("#dept-filter, #f-discipline-filter").on("change", applyFilters);
+
   function load(){
     GA.loading("#tbl", {rows:6, cols:5});
     return GA.get("{% url 'academics:api_batches' %}").done(function(res){
       rows = res.data.rows;
       if(!table) table = GA.table("#tbl",{ csvName:"batches",columns:cols, rows:rows, search:"#search", empty:"No batches yet."});
       else table.setRows(rows);
-      bind();
+      applyFilters();
     });
   }
   $("#btn-new").on("click", function(){

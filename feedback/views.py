@@ -25,14 +25,14 @@ from .models import FeedbackForm, FeedbackRecipient, FeedbackResponse
 from .questions import as_payload
 from .services import FeedbackError
 
-HEAD, HOD, TEACHER, STUDENT, GUARDIAN = (
-    "HEAD", "HOD", "TEACHER", "STUDENT", "GUARDIAN")
+HEAD, HOD, TEACHER, STUDENT, GUARDIAN, UNIVERSITY = (
+    "HEAD", "HOD", "TEACHER", "STUDENT", "GUARDIAN", "UNIVERSITY")
 
 
 # --------------------------------------------------------------------------- #
 #  Teacher: asking
 # --------------------------------------------------------------------------- #
-@role_required(TEACHER, HOD, HEAD)
+@role_required(TEACHER, HOD, HEAD, UNIVERSITY)
 @require_POST
 def api_send(request, pk):
     session = get_object_or_404(
@@ -122,7 +122,7 @@ def api_submit(request, pk):
 # --------------------------------------------------------------------------- #
 #  Staff
 # --------------------------------------------------------------------------- #
-@role_required(TEACHER, HOD, HEAD)
+@role_required(TEACHER, HOD, HEAD, UNIVERSITY)
 @ensure_csrf_cookie
 def feedback_page(request):
     institute = request.user.institute
@@ -137,7 +137,7 @@ def feedback_page(request):
     })
 
 
-@role_required(TEACHER, HOD, HEAD)
+@role_required(TEACHER, HOD, HEAD, UNIVERSITY)
 @require_GET
 def api_forms(request):
     """One row per class."""
@@ -148,7 +148,7 @@ def api_forms(request):
     })
 
 
-@role_required(TEACHER, HOD, HEAD)
+@role_required(TEACHER, HOD, HEAD, UNIVERSITY)
 @require_GET
 def api_form_detail(request, pk):
     form = get_object_or_404(
@@ -156,7 +156,7 @@ def api_form_detail(request, pk):
     return ok(svc.staff_detail(form))
 
 
-@role_required(TEACHER, HOD, HEAD)
+@role_required(TEACHER, HOD, HEAD, UNIVERSITY)
 @require_GET
 def api_groups(request, kind):
     """
@@ -181,7 +181,7 @@ def api_groups(request, kind):
     })
 
 
-@role_required(TEACHER, HOD, HEAD)
+@role_required(TEACHER, HOD, HEAD, UNIVERSITY)
 @require_GET
 def api_group_detail(request, kind, pk):
     if kind not in svc.GROUPINGS:

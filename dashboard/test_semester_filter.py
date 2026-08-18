@@ -5,7 +5,7 @@ from django.test import RequestFactory, TestCase
 from django.utils import timezone
 
 from academics.models import Batch, Department, Enrollment, StudentProfile, Subject, TeacherAssignment
-from accounts.models import Institute, User
+from accounts.models import Institute, InstituteAffiliation, User
 from attendance.models import AttendanceRecord, AttendanceSession
 from dashboard import services as svc
 from dashboard.filters import ReportFilters
@@ -139,3 +139,129 @@ class SemesterFilterTests(TestCase):
                           {"semester": "3"}).content.decode()
         self.assertIn("DSA", body)
         self.assertNotIn("CN", body)
+
+
+class SemesterOptionsTests(TestCase):
+    """
+    The dropdown must offer each semester once.
+
+    `Subject.Meta.ordering` is `["semester", "code"]`, and Django appends every
+    ordering field to the SELECT — so `.values_list("semester").distinct()` was
+    distinct over *(semester, code)* and two subjects in semester 3 produced
+    "Semester 3" twice. The fix is `.order_by()` before the values_list, which
+    looks like decoration and is the whole thing.
+    """
+
+    def setUp(self):
+        self.institute = Institute.objects.create(
+            name="I2", code="I2", email="i2@i.edu")
+        self.cse = Department.objects.create(
+            institute=self.institute, name="CSE", code="CSE", discipline="ENGG")
+        for code, semester in (("A", 3), ("B", 3), ("C", 3), ("D", 5)):
+            Subject.objects.create(department=self.cse, code=code, name=code,
+                                   semester=semester)
+        self.head = User.objects.create_user(
+            email="head2@i.edu", password="Str0ngPass!23", role="HEAD",
+            institute=self.institute, registration_completed=True)
+
+    def test_each_semester_appears_once(self):
+        from academics.selectors import semester_options
+
+        self.assertEqual(semester_options(self.head), [3, 5])
+
+    def test_the_naive_query_is_what_was_wrong(self):
+        """
+        The control. If Django stopped dragging the ordering into the SELECT,
+        the test above would be asserting nothing and nobody would notice.
+        """
+        from academics.selectors import subjects_for
+
+        naive = list(subjects_for(self.head).exclude(semester=None)
+                     .values_list("semester", flat=True).distinct())
+        self.assertNotEqual(sorted(set(naive)), sorted(naive))
+
+    def test_it_offers_only_semesters_that_exist(self):
+        """
+        A fixed 1..12 list would offer filters that can never match. (There is
+        no "no semester" case to test: the column is NOT NULL with a default of
+        1, so the `exclude(semester=None)` in the helper is belt-and-braces.)
+        """
+        from academics.selectors import semester_options
+
+        self.assertNotIn(1, semester_options(self.head))
+        self.assertNotIn(8, semester_options(self.head))
+
+    def test_the_page_renders_each_option_once(self):
+        self.client.force_login(self.head)
+        html = self.client.get("/app/").content.decode()
+        self.assertEqual(html.count(">Semester 3</option>"), 1)
+        self.assertEqual(html.count(">Semester 5</option>"), 1)
+
+
+class DisciplineFilterTests(TestCase):
+    """The dashboard's new discipline filter, on the server side."""
+
+    def setUp(self):
+        self.institute = Institute.objects.create(
+            name="I3", code="I3", email="i3@i.edu")
+        self.engg = Department.objects.create(
+            institute=self.institute, name="CSE", code="CSE", discipline="ENGG")
+        self.arts = Department.objects.create(
+            institute=self.institute, name="Arts", code="ART",
+            discipline="GENERAL")
+        # Both disciplines on file, or the departments read as revoked and
+        # every scoped query correctly returns nothing — which is what the
+        # first version of this fixture was actually testing.
+        for discipline in ("ENGG", "GENERAL"):
+            InstituteAffiliation.objects.create(
+                institute=self.institute, discipline=discipline, university=None)
+        self.head = User.objects.create_user(
+            email="head3@i.edu", password="Str0ngPass!23", role="HEAD",
+            institute=self.institute, registration_completed=True)
+        self.teacher = User.objects.create_user(
+            email="t3@i.edu", password="Str0ngPass!23", role="TEACHER",
+            institute=self.institute, department=self.engg,
+            registration_completed=True)
+
+        for department in (self.engg, self.arts):
+            batch = Batch.objects.create(
+                department=department, label="2022-26",
+                start_year=2022, end_year=2026)
+            subject = Subject.objects.create(
+                department=department, code=f"S{department.code}",
+                name="S", semester=1)
+            AttendanceSession.objects.create(
+                teacher=self.teacher, subject=subject, batch=batch,
+                latitude=0, longitude=0, session_date=timezone.localdate(),
+                expires_at=timezone.now(), status="CLOSED")
+            user = User.objects.create_user(
+                email=f"s{department.code}@i.edu", password="Str0ngPass!23",
+                role="STUDENT", institute=self.institute)
+            profile = StudentProfile.objects.create(
+                user=user, department=department, batch=batch, class_roll="1")
+            Enrollment.objects.create(student=profile, subject=subject)
+
+    def _filters(self, **params):
+        request = RequestFactory().get("/", params)
+        return ReportFilters.from_request(request)
+
+    def test_it_narrows_the_sessions_to_one_discipline(self):
+        self.assertEqual(
+            svc.scoped_sessions(self.head, self._filters(discipline="ENGG")).count(), 1)
+        self.assertEqual(
+            svc.scoped_sessions(self.head, self._filters()).count(), 2)
+
+    def test_it_narrows_the_students_by_their_department_not_their_subjects(self):
+        """
+        Unlike degree and subject-type, a student *is* in a discipline — it
+        comes from their department. So this is a direct filter, and a student
+        with no enrolments is still counted.
+        """
+        self.assertEqual(
+            svc.scoped_students(self.head, self._filters(discipline="GENERAL")).count(), 1)
+
+    def test_an_unknown_discipline_is_ignored_rather_than_matching_nothing(self):
+        """A typo in a bookmark should not produce an empty page of real data."""
+        self.assertIsNone(self._filters(discipline="NONSENSE").discipline)
+        self.assertEqual(
+            svc.scoped_sessions(self.head, self._filters(discipline="NONSENSE")).count(), 2)

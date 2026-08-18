@@ -14,6 +14,7 @@ because that is where an archived batch is brought back.
 from django.db.models import Q
 
 from accounts.models import User
+from accounts.scoping import institutes_for
 
 from .models import (
     Batch,
@@ -29,6 +30,11 @@ from .models import (
 def departments_for(user):
     if not user.is_authenticated:
         return Department.objects.none()
+    if user.is_university:
+        # Every department of every institute this university reaches. The
+        # university has head-of-institute authority, so its department scope
+        # is the head's scope repeated across institutes.
+        return Department.objects.filter(institute__in=institutes_for(user))
     if user.is_head:
         return Department.objects.filter(institute=user.institute)
     if user.is_hod:
@@ -43,6 +49,8 @@ def current_department(user):
 
 
 def subjects_for(user):
+    if user.is_university:
+        return Subject.objects.filter(department__institute__in=institutes_for(user))
     if user.is_head:
         return Subject.objects.filter(department__institute=user.institute)
     if user.is_hod:
@@ -74,6 +82,29 @@ def subject_type_options():
     match anything.
     """
     return [{"value": value, "label": label} for value, label in SubjectType.choices]
+
+
+def semester_options(user):
+    """
+    The semesters that actually exist in this user's scope, each once.
+
+    **`.order_by()` is doing real work here.** `Subject.Meta.ordering` is
+    `["semester", "code"]`, and Django appends every ordering field to the
+    SELECT — so `.values_list("semester").distinct()` was distinct over
+    *(semester, code)*, and two subjects in semester 3 produced "Semester 3"
+    twice in the dropdown. Clearing the ordering first is what makes DISTINCT
+    mean what it reads as.
+
+    A fixed 1..12 list would avoid the problem and offer filters that can never
+    match anything, which is worse.
+    """
+    return sorted(
+        subjects_for(user)
+        .exclude(semester=None)
+        .order_by()                       # see the note above — not decoration
+        .values_list("semester", flat=True)
+        .distinct()
+    )
 
 
 def degree_options():
@@ -135,7 +166,9 @@ def batches_for(user, include_inactive=False):
     Batches this user may see.  Archived ones are hidden unless explicitly asked
     for — only the Batches admin screen does that.
     """
-    if user.is_head:
+    if user.is_university:
+        qs = Batch.objects.filter(department__institute__in=institutes_for(user))
+    elif user.is_head:
         qs = Batch.objects.filter(department__institute=user.institute)
     elif user.is_hod:
         qs = Batch.objects.filter(department__in=departments_for(user))
@@ -161,6 +194,9 @@ def teachers_for(user):
     gates on this, so a HoD who can see the whole institute still cannot touch
     anyone outside their own department, whatever the browser posts.
     """
+    if user.is_university:
+        return User.objects.filter(role=User.Role.TEACHER,
+                                   institute__in=institutes_for(user))
     if user.is_head:
         return User.objects.filter(role=User.Role.TEACHER, institute=user.institute)
     if user.is_hod:
@@ -181,6 +217,9 @@ def visible_teachers_for(user):
     bookkeeping, and listing them to students is confusing at best — a student
     messaging a teacher who has left is a worse outcome than a shorter list.
     """
+    if user.is_university:
+        return User.objects.filter(role=User.Role.TEACHER,
+                                   institute__in=institutes_for(user))
     if user.is_head or user.is_hod or user.is_teacher:
         return User.objects.filter(role=User.Role.TEACHER, institute=user.institute)
     if user.is_student or user.is_guardian:
@@ -193,6 +232,8 @@ def visible_teachers_for(user):
 
 def manageable_department_ids(user):
     """Department ids whose teachers `user` may edit — drives the row flags."""
+    if user.is_university:
+        return None                      # None means "everything in scope"
     if user.is_head:
         return None                      # None means "everything in scope"
     if user.is_hod:
@@ -200,11 +241,28 @@ def manageable_department_ids(user):
     return set()
 
 
-def students_qs_for(user, include_inactive_batches=False):
-    """Students this user may see.  Members of archived batches are excluded."""
+def students_qs_for(user, include_inactive_batches=False,
+                    include_dead_departments=False):
+    """
+    Students this user may see. Members of archived batches are excluded.
+
+    `include_dead_departments` is for the Students *management* screen and
+    nothing else. That screen has to list a student in an archived or revoked
+    department — showing them, with the right status, is the whole point of the
+    status column. Every other caller is a report or a statistic, and a
+    department that is archived or revoked should contribute to neither, so the
+    default excludes them.
+
+    Two flags rather than one because they answer different questions: a
+    graduated cohort and a closed department are separate reasons to disappear,
+    and a screen may want one without the other.
+    """
     from .models import StudentProfile
 
-    if user.is_head:
+    if user.is_university:
+        qs = StudentProfile.objects.filter(
+            department__institute__in=institutes_for(user))
+    elif user.is_head:
         qs = StudentProfile.objects.filter(department__institute=user.institute)
     elif user.is_hod:
         qs = StudentProfile.objects.filter(department__in=departments_for(user))
@@ -238,10 +296,22 @@ def students_qs_for(user, include_inactive_batches=False):
               else StudentProfile.objects.none())
     else:
         return StudentProfile.objects.none()
-    return qs if include_inactive_batches else qs.filter(batch__is_active=True)
+    if not include_inactive_batches:
+        qs = qs.filter(batch__is_active=True)
+    if not include_dead_departments:
+        # Archiving a department leaves its batches alone by design — state
+        # flows down rather than being copied — so without this an archived
+        # department's students would keep contributing to every report while
+        # reading as archived on their own screen.
+        from .curriculum import live_departments
+        from .models import Department
+
+        qs = qs.filter(department__in=live_departments(Department.objects.all()))
+    return qs
 
 
-def all_students_for(user, include_inactive_batches=False):
+def all_students_for(user, include_inactive_batches=False,
+                     include_dead_departments=False):
     """
     Every student in the institute — the directory scope.
 
@@ -252,11 +322,21 @@ def all_students_for(user, include_inactive_batches=False):
     """
     from .models import StudentProfile
 
-    if user.is_head or user.is_hod or user.is_teacher:
+    if user.is_university:
+        qs = StudentProfile.objects.filter(
+            department__institute__in=institutes_for(user))
+    elif user.is_head or user.is_hod or user.is_teacher:
         qs = StudentProfile.objects.filter(department__institute=user.institute)
     else:
         return StudentProfile.objects.none()
-    return qs if include_inactive_batches else qs.filter(batch__is_active=True)
+    if not include_inactive_batches:
+        qs = qs.filter(batch__is_active=True)
+    if not include_dead_departments:
+        from .curriculum import live_departments
+        from .models import Department
+
+        qs = qs.filter(department__in=live_departments(Department.objects.all()))
+    return qs
 
 
 def teacher_subjects_for_batch(teacher, batch):
@@ -270,29 +350,27 @@ def teacher_subjects_for_batch(teacher, batch):
     ).distinct()
 
 
-def enrolled_students(subject, batch):
-    """Students of `batch` who enrolled in `subject` — the attendance audience."""
-    from .models import StudentProfile
+def enrolled_students(subject, batch, section=None):
+    """
+    Students of this group who enrolled in `subject` — the attendance audience.
 
-    return (
-        StudentProfile.objects.filter(
-            batch=batch,
-            batch__is_active=True,
-            is_active=True,
-            enrollments__subject=subject,
-            enrollments__is_active=True,
-            user__is_active=True,
-        )
-        .select_related("user", "batch")
-        .distinct()
-    )
+    Delegates to `academics.allocation.students_for`, which is the single
+    definition of "who is in this class". The session view counts it and the
+    marking view tests membership against it; two copies of that query is how a
+    student ends up able to mark a class they were not in.
+
+    `section=None` means the whole batch, as it does everywhere.
+    """
+    from .allocation import students_for
+
+    return students_for(subject, batch, section)
 
 
-def can_teach(teacher, subject, batch):
-    return TeacherAssignment.objects.filter(
-        teacher=teacher, subject=subject, batch=batch,
-        batch__is_active=True, is_active=True,
-    ).exists()
+def can_teach(teacher, subject, batch, section=None):
+    """See `academics.allocation.can_teach` — kept here as the old import path."""
+    from .allocation import can_teach as _can_teach
+
+    return _can_teach(teacher, subject, batch, section)
 
 
 def is_enrolled(student_profile, subject):

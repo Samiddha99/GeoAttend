@@ -24,15 +24,31 @@
           </select>
         </div>
 
+        <!--
+          The section step. "Whole batch" is a real choice, not the absence of
+          one — it is what a college that does not divide its cohorts means,
+          and what covers students who are in no section. Choosing it opens the
+          register for everybody in the batch; choosing a section opens it for
+          that room only, and nobody else can mark it. See
+          academics/allocation.py.
+        -->
         <div class="mb-3">
-          <label class="form-label">2 · Subject</label>
+          <label class="form-label">2 · Section</label>
+          <select class="form-select" id="section" disabled>
+            <option value="">Whole batch</option>
+          </select>
+          <div class="form-text" id="section-note">Choose a batch first.</div>
+        </div>
+
+        <div class="mb-3">
+          <label class="form-label">3 · Subject</label>
           <div id="subject-list" class="border rounded-3 p-2" style="min-height:64px">
             <small class="text-muted-2">Choose a batch to see the subjects assigned to you.</small>
           </div>
         </div>
 
         <div class="mb-3">
-          <label class="form-label">3 · Link validity</label>
+          <label class="form-label">4 · Link validity</label>
 <!--
             Each shortcut is hidden if it exceeds the configured ceiling.
             Otherwise lowering MAX_EXPIRY_MIN would leave one-click buttons
@@ -72,9 +88,27 @@
           </div>
         </div>
 
+        <!--
+          Off by default, and deliberately so. The class is in the room: they
+          open their dashboard and the link is there, which is the ordinary
+          case. Emailing thirty people a link that expires in fifteen minutes
+          is the exception — worth having for a lab spread across a building,
+          not worth doing every hour of every day.
+
+          Turning it off costs the student nothing: the same link is on their
+          dashboard either way (see dashboard/views.api_my_summary), and a
+          teacher who changes their mind can send it from the session screen.
+        -->
         <div class="form-check mb-3">
-          <input class="form-check-input" type="checkbox" id="notify" checked>
-          <label class="form-check-label fs-13" for="notify">Email the link to every enrolled student</label>
+          <input class="form-check-input" type="checkbox" id="notify">
+          <label class="form-check-label fs-13" for="notify">
+            Also email the link to every enrolled student
+            <div class="form-text mb-0">
+              Off by default. Students see the link on their dashboard whether
+              or not you tick this — you can also send it later from the
+              session screen.
+            </div>
+          </label>
         </div>
 
         <div class="alert alert-light border fs-13 d-flex gap-2 py-2" id="geo-box">
@@ -208,16 +242,40 @@ $(function(){
     $("#btn-generate").prop("disabled", !(coords && subjectId && $("#batch").val()));
   }
 
-  /* ---------------- subject picker ---------------- */
-  $("#batch").on("change", function(){
+  /* ---------------- section + subject picker ---------------- */
+  /*
+    Both are reloaded from one endpoint, because the subject list depends on
+    the section: a teacher allocated section A only must not be offered the
+    subject for the whole cohort, and the enrolled count has to be the number
+    who will be in the room. Asking the server twice for two halves of one
+    answer is how the two drift apart.
+  */
+  function loadSubjects(){
     subjectId = null; check();
-    const id = $(this).val();
-    if(!id){ $("#subject-list").html('<small class="text-muted-2">Choose a batch to see the subjects assigned to you.</small>'); return; }
+    const id = $("#batch").val();
+    if(!id){
+      $("#subject-list").html('<small class="text-muted-2">Choose a batch to see the subjects assigned to you.</small>');
+      $("#section").prop("disabled", true).html('<option value="">Whole batch</option>');
+      $("#section-note").text("Choose a batch first.");
+      return;
+    }
     $("#subject-list").html('<div class="ga-skeleton" style="height:48px"></div>');
-    GA.get("/attendance/api/batches/"+id+"/subjects/").done(function(res){
+    GA.get("/attendance/api/batches/"+id+"/subjects/",
+           {section: $("#section").val() || ""}).done(function(res){
       const rows = res.data.rows;
+      // Rebuilt only when the batch changed, or reselecting a section would
+      // wipe the choice that triggered this load.
+      if($("#section").data("batch") !== id){
+        const secs = res.data.sections || [];
+        $("#section").data("batch", id).prop("disabled", false).html(
+          '<option value="">Whole batch</option>' +
+          secs.map(s=>'<option value="'+s.id+'">'+GA.esc(s.name)+'</option>').join(""));
+        $("#section-note").text(secs.length
+          ? "Only this section's students can mark the register."
+          : "This batch has no sections — the register is for the whole batch.");
+      }
       if(!rows.length){
-        $("#subject-list").html('<small class="text-danger">You have no subjects assigned for this batch. Ask your HoD.</small>');
+        $("#subject-list").html('<small class="text-danger">You have no subjects assigned for this group. Ask your HoD, or try another section.</small>');
         return;
       }
       $("#subject-list").html(rows.map(s=>
@@ -234,7 +292,13 @@ $(function(){
         check();
       });
     });
+  }
+  $("#batch").on("change", function(){
+    // Clear the remembered batch so the section list is rebuilt for the new one.
+    $("#section").removeData("batch").val("");
+    loadSubjects();
   });
+  $("#section").on("change", loadSubjects);
 
   $("#quick-min .ga-chip").on("click", function(){
     $("#quick-min .ga-chip").removeClass("sel"); $(this).addClass("sel");
@@ -284,11 +348,21 @@ $(function(){
     const $btn = $(this); GA.btnBusy($btn, true, "Generating…");
     GA.post("{% url 'attendance:api_session_create' %}", {
       batch: $("#batch").val(), subject: subjectId,
+      /* "" is the whole batch — see academics/allocation.py. */
+      section: $("#section").val() || "",
       latitude: coords.latitude, longitude: coords.longitude, accuracy: coords.accuracy,
       minutes: $("#minutes").val(), radius: $("#radius").val(),
       note: $("#note").val(), notify: $("#notify").is(":checked") ? "1" : "0"
     }).done(function(res){
-      GA.toast(res.message + (res.data.emailed ? " Emailed "+res.data.emailed+" students." : ""), "ok");
+      /*
+        Says which of the two happened, rather than staying silent when nobody
+        was emailed. "Link created" alone leaves a teacher wondering whether
+        the mail is on its way, and the answer to that has just become "usually
+        not".
+      */
+      GA.toast(res.message + (res.data.emailed
+        ? " Emailed " + res.data.emailed + " students."
+        : " Not emailed — students will find it on their dashboard."), "ok");
       startLive(res.data);
     }).always(()=> GA.btnBusy($btn,false));
   });

@@ -29,6 +29,7 @@ from accounts.emails import send_invitation
 from accounts.services import invite_user
 from core.utils import normalise_email, parse_batch_label
 
+from . import sections
 from .models import Batch, Enrollment, ImportJob, StudentProfile, Subject
 
 HEADER_ALIASES = {
@@ -43,6 +44,11 @@ HEADER_ALIASES = {
     "class_roll": {"class roll", "class roll no", "class roll no.", "class roll number",
                    "roll", "roll no", "roll no.", "roll number", "rollno", "class no",
                    "class number"},
+    # Which section of the batch. Optional everywhere: a college that does not
+    # divide its cohorts leaves the column out, and one that does can fill it
+    # in later without re-uploading anything else.
+    "section": {"section", "sec", "section name", "class section", "division",
+                "div", "group"},
     "exam_roll": {"exam roll", "exam roll no", "exam roll no.", "exam roll number",
                   "examroll", "registration no", "registration number", "reg no",
                   "university roll", "university roll no", "admit card no", "exam no"},
@@ -55,6 +61,29 @@ HEADER_ALIASES = {
                         "guardian", "parent"},
     "guardian_name": {"guardian name", "parent name", "father name", "mother name",
                       "guardian/parent name"},
+    # **An instruction, not a check.** The department used to be chosen once
+    # for the whole file, from a dropdown, which meant a college with six
+    # departments uploaded six spreadsheets. It is a column now: one file can
+    # carry the whole institute, and each row says where its student belongs.
+    #
+    # Matched on code or name, the same way subjects are — "CSE" and "Computer
+    # Science" both find the same department, because a registrar's export
+    # spells it whichever way their other system does.
+    "department": {"department", "department name", "department code", "dept",
+                   "dept name", "dept code", "branch"},
+    # A *check*, not an instruction. A student's institute follows from the
+    # department their row names, so a cell cannot move them — but a sheet
+    # naming a different institute is almost always a sheet uploaded to the
+    # wrong account, which is worth catching before it lands. Optional: omit it
+    # and nothing is checked.
+    "institute": {"institute", "institute name", "college", "college name",
+                  "institution"},
+    # Kept, deliberately unused. Discipline was a checked column and is not one
+    # any more: it follows from the department, which the row now names, so
+    # there is nothing left for it to catch that the department does not. The
+    # alias stays so that a sheet exported before this change still parses —
+    # the column is simply ignored rather than reported as unknown.
+    "discipline": {"discipline", "stream", "faculty", "branch of study"},
 }
 
 # Email is the key the upsert matches on, so it is the only header the file
@@ -63,7 +92,34 @@ HEADER_ALIASES = {
 REQUIRED_COLUMNS = ("email",)
 
 # Enforced only when creating. An existing student may omit any of these.
-NEW_STUDENT_REQUIRED = ("name", "class_roll", "batch", "subjects", "guardian_mobile")
+#
+# `department` joined this list when it stopped being a dropdown: a new student
+# has to belong somewhere, and there is no longer a single answer to fall back
+# on. An *existing* student may leave it blank, which keeps theirs — the same
+# rule every other column follows.
+NEW_STUDENT_REQUIRED = ("name", "department", "class_roll", "batch",
+                        "subjects", "guardian_mobile")
+
+# The one column order, used by the template the head downloads *and* by the
+# roster export they upload back. Two literal lists drifted the moment either
+# gained a column — the export still ended at "Mobile Number" while the
+# template had grown Institute and Discipline — so a round trip put values
+# under the wrong headings. One list cannot drift from itself.
+#
+# `Status` is deliberately outside it: it is an export-only note, and it sits
+# after the shared columns so the two files line up cell for cell until it.
+ROSTER_COLUMNS = [
+    "Email", "Name", "Department", "Class Roll", "Exam Roll", "Batch",
+    "Section", "Subjects Enrolled", "Guardian Mobile", "Guardian Name",
+    "Guardian Email", "Mobile Number", "Institute",
+]
+EXPORT_ONLY_COLUMNS = ["Status"]
+
+
+def _same(a, b):
+    """Loose string equality — case and surrounding space do not matter."""
+    return (a or "").strip().casefold() == (b or "").strip().casefold()
+
 
 # Put this in a cell to blank a value that is currently set. Without it there
 # would be no way to erase a guardian email, because blank means "unchanged".
@@ -183,14 +239,18 @@ def _normalise(header_row, body):
             "_row": i,
             "name": cell("name"),
             "email": normalise_email(cell("email")),
+            "department": cell("department"),
             "mobile": cell("mobile"),
             "batch": cell("batch"),
             "subjects": cell("subjects"),
             "class_roll": cell("class_roll"),
+            "section": cell("section"),
             "exam_roll": cell("exam_roll"),
             "guardian_name": cell("guardian_name"),
             "guardian_mobile": cell("guardian_mobile"),
             "guardian_email": normalise_email(cell("guardian_email")),
+            "institute": cell("institute"),
+            "discipline": cell("discipline"),
         })
     return rows, None
 
@@ -200,22 +260,64 @@ def _split_subjects(value):
 
 
 @transaction.atomic
-def import_students(rows, department, uploader, file_name="roster.xlsx",
-                    create_missing_batches=False, send_invites=True):
+def import_students(rows, institute, uploader, file_name="roster.xlsx",
+                    create_missing_batches=False, send_invites=True,
+                    allowed_departments=None):
     """
-    Validate & persist a parsed roster.  Returns an ImportJob with a per-row report.
-    Nothing is written unless the whole file parses (atomic).
-    """
-    subject_index = {}
-    for s in Subject.objects.filter(department=department):
-        subject_index[s.code.strip().lower()] = s
-        subject_index[s.name.strip().lower()] = s
+    Validate & persist a parsed roster. Returns an ImportJob with a per-row
+    report. Nothing is written unless the whole file parses (atomic).
 
-    batch_cache = {b.label.lower(): b for b in Batch.objects.filter(department=department)}
+    **The department comes from each row, not from the caller.** It used to be
+    a single argument chosen from a dropdown, which meant a college with six
+    departments uploaded six files and a head could not hand one spreadsheet to
+    the registry. `institute` is the scope now, and every row names its own
+    department by code or name.
+
+    `allowed_departments` narrows that further and is not optional in practice:
+    a HoD may upload, and without it a Department column would let them file
+    students into a department they do not run. `None` means "no narrowing" and
+    is for callers that have already scoped — the tests, and the seeder.
+    """
+    from .models import Department
+
+    departments = Department.objects.filter(institute=institute)
+    if allowed_departments is not None:
+        allowed_ids = {d.pk for d in allowed_departments}
+        departments = departments.filter(pk__in=allowed_ids)
+    # Code *and* name, lower-cased, the way subjects are matched — a registrar's
+    # export spells it whichever way their other system does.
+    department_index = {}
+    for d in departments:
+        department_index[d.code.strip().lower()] = d
+        department_index[d.name.strip().lower()] = d
+
+    # Per department, built lazily. One file can now touch every department in
+    # the college, and loading every subject and batch up front would be a
+    # large query for a sheet that turns out to name one of them.
+    subject_indexes = {}
+    batch_caches = {}
+
+    def subjects_of(dept):
+        if dept.pk not in subject_indexes:
+            index = {}
+            for s in Subject.objects.filter(department=dept):
+                index[s.code.strip().lower()] = s
+                index[s.name.strip().lower()] = s
+            subject_indexes[dept.pk] = index
+        return subject_indexes[dept.pk]
+
+    def batches_of(dept):
+        if dept.pk not in batch_caches:
+            batch_caches[dept.pk] = {
+                b.label.lower(): b for b in Batch.objects.filter(department=dept)}
+        return batch_caches[dept.pk]
 
     created = updated = errors = 0
     report = []
     seen_emails = set()
+    # Named, not just counted. "3 sections created" is reassuring; "2022-26 · AA"
+    # is the line that tells somebody they typed the section name twice.
+    sections_created = []
 
     # One query for the whole file: which of these emails already exist, and
     # what do they currently hold? Needed both to decide which columns are
@@ -224,8 +326,12 @@ def import_students(rows, department, uploader, file_name="roster.xlsx",
         p.user.email: p
         for p in StudentProfile.objects.filter(
             user__email__in=[r["email"] for r in rows if r["email"]]
-        ).select_related("user", "batch")
+        ).select_related("user", "batch", "department")
     }
+    # Departments a row put a student into, for the job record. A file can span
+    # several now, so `ImportJob` records the institute and names the
+    # departments rather than pretending there was one.
+    touched_departments = set()
 
     for row in rows:
         line, problems = row["_row"], []
@@ -249,6 +355,33 @@ def import_students(rows, department, uploader, file_name="roster.xlsx",
                     problems.append(
                         f"{field.replace('_', ' ')} is blank — required for a new student")
 
+        # The department this row's student belongs to. Resolved before
+        # anything that depends on it — subjects and batches are looked up
+        # inside it, so a row that names an unknown department cannot be
+        # checked any further and says so once rather than three times.
+        department = None
+        if row.get("department") and not _clear(row["department"]):
+            department = department_index.get(row["department"].strip().lower())
+            if department is None:
+                problems.append(
+                    f"department '{row['department']}' is not one you manage — "
+                    f"check the spelling, or use its code")
+        elif current is not None:
+            # Blank on an existing student keeps theirs, like every other
+            # column. (A new student with no department was rejected above.)
+            department = current.department
+
+        # The institute, if the sheet supplied it. Compared, never applied — a
+        # student's institute follows from their department. Discipline used to
+        # be checked here too and is not any more: it follows from the
+        # department, which the row now names, so there is nothing left for it
+        # to catch.
+        if row.get("institute") and not _clear(row["institute"]):
+            if not _same(row["institute"], institute.name):
+                problems.append(
+                    f"institute '{row['institute']}' is not "
+                    f"{institute.name} — is this the right file?")
+
         parsed = None
         if row["batch"]:
             parsed = parse_batch_label(row["batch"])
@@ -266,28 +399,54 @@ def import_students(rows, department, uploader, file_name="roster.xlsx",
         if row["mobile"] and not _clear(row["mobile"]):
             student_mobile, _ = clean_phone(row["mobile"])
 
+        # Subjects are looked up *inside this row's department*, so "DSA" in
+        # one department and "DSA" in another are two different papers — which
+        # they are. Skipped entirely when the department did not resolve:
+        # every code would be reported unknown, burying the one problem that
+        # matters under a list of consequences.
         subject_names = _split_subjects(row["subjects"])
         matched, unknown = [], []
-        for token in subject_names:
-            hit = subject_index.get(token.lower())
-            (matched.append(hit) if hit else unknown.append(token))
-        if unknown:
-            problems.append(
-                "unknown subject(s): %s — add them under Subjects first" % ", ".join(unknown)
-            )
+        if department is not None:
+            index = subjects_of(department)
+            for token in subject_names:
+                hit = index.get(token.lower())
+                (matched.append(hit) if hit else unknown.append(token))
+            if unknown:
+                problems.append(
+                    "unknown subject(s) in %s: %s — add them under Subjects first"
+                    % (department.code, ", ".join(unknown))
+                )
 
         if problems:
             errors += 1
             report.append({"row": line, "email": email, "status": "error",
+                           "department": row.get("department", ""),
+                           "institute": row.get("institute", ""),
                            "messages": problems})
             continue
 
         seen_emails.add(email)
+        touched_departments.add(department.code)
+        batch_cache = batches_of(department)
 
         if parsed is None:
             # No batch column for a student who already exists: keep theirs.
             # (A new student without a batch was already rejected above.)
             batch, label = current.batch, current.batch.label
+            # …unless the row also moved them to another department, in which
+            # case their old batch belongs to the department they are leaving.
+            # Refusing beats guessing: a batch is a cohort, and picking one for
+            # somebody would put them in a year nobody chose.
+            if batch.department_id != department.pk:
+                errors += 1
+                report.append({
+                    "row": line, "email": email, "status": "error",
+                    "messages": [
+                        f"this row moves {email} to {department.code}, so it "
+                        f"has to name a batch in {department.code} — "
+                        f"{label} belongs to {batch.department.code}"],
+                })
+                continue
         else:
             start, end, label = parsed
             batch = batch_cache.get(label.lower())
@@ -329,6 +488,7 @@ def import_students(rows, department, uploader, file_name="roster.xlsx",
             payload={"batch": label, "class_roll": row["class_roll"],
                      "exam_roll": row["exam_roll"]},
             extra_lines=[
+                f"Department: {department.name} ({department.code})",
                 f"Batch: {label}",
                 "Subjects: " + ", ".join(s.code for s in matched),
             ],
@@ -348,9 +508,33 @@ def import_students(rows, department, uploader, file_name="roster.xlsx",
         invited = bool(send_invites and was_created and invitation is not None)
         if invited:
             send_invitation(invitation, extra_lines=[
+                f"Department: {department.name} ({department.code})",
                 f"Batch: {label}",
                 "Subjects: " + ", ".join(s.code for s in matched),
             ])
+
+        # The section, created if this batch has not seen it before. The sheet
+        # is the source of truth for a new intake, so an import of 200 students
+        # across A–D produces the four sections rather than 200 errors. How
+        # many were created is reported at the end, which is what makes a typo
+        # like "AA" visible instead of silent.
+        #
+        # Resolved against `batch` — the row's batch, not the student's current
+        # one — so a row that moves somebody to another cohort puts them in a
+        # section of the cohort they are moving *to*.
+        section = current.section if current else None
+        if row["section"] and not _clear(row["section"]):
+            section, made = sections.resolve(batch, row["section"], create=True)
+            if made:
+                sections_created.append(f"{batch.label} · {section.name}")
+        elif _clear(row["section"]):
+            section = None
+        # A student kept from a previous import may hold a section of the batch
+        # they are leaving. Clearing beats carrying it across: an unsectioned
+        # student is an ordinary state, one listed under another cohort's
+        # section is a quiet error in two rosters.
+        if section is not None and section.batch_id != batch.pk:
+            section = None
 
         # Blank cell = leave it alone. Without this a sheet of just
         # email + guardian mobile would erase every other field on the row.
@@ -359,6 +543,7 @@ def import_students(rows, department, uploader, file_name="roster.xlsx",
             defaults={
                 "department": department,
                 "batch": batch,
+                "section": section,
                 "class_roll": _merge(row["class_roll"], current.class_roll if current else ""),
                 "exam_roll": _merge(row["exam_roll"], current.exam_roll if current else ""),
                 "mobile": _merge(student_mobile or row["mobile"],
@@ -395,6 +580,7 @@ def import_students(rows, department, uploader, file_name="roster.xlsx",
             status = "updated"
         report.append({
             "row": line, "email": email, "name": profile.name, "batch": label,
+            "section": profile.section.name if profile.section_id else "",
             "class_roll": profile.class_roll, "exam_roll": profile.exam_roll,
             "guardian_mobile": profile.guardian_mobile,
             "subjects": [s.code for s in matched] or
@@ -402,6 +588,12 @@ def import_students(rows, department, uploader, file_name="roster.xlsx",
             # Shown in the preview so "who will be emailed" is visible before
             # anything is sent, not discovered afterwards.
             "invited": invited,
+            # Echoed from the *resolved* department rather than from the cell.
+            # "CSE" in the sheet and "Computer Science" on screen is the row
+            # working; the point of showing it is to confirm which department a
+            # row actually landed in, which the cell cannot say.
+            "department": f"{department.name} ({department.code})",
+            "institute": institute.name,
             "status": status, "messages": [],
         })
 
@@ -413,7 +605,10 @@ def import_students(rows, department, uploader, file_name="roster.xlsx",
         job_status = ImportJob.Status.SUCCESS
 
     return ImportJob.objects.create(
-        department=department,
+        # The institute, not a department. A file can name several now, so
+        # picking one for the record would be picking a winner — the ones it
+        # actually touched are listed in the report instead.
+        institute=institute,
         uploaded_by=uploader,
         file_name=file_name[:255],
         status=job_status,
@@ -421,7 +616,11 @@ def import_students(rows, department, uploader, file_name="roster.xlsx",
         created_count=created,
         updated_count=updated,
         error_count=errors,
-        report={"rows": report},
+        # Listed by name so a mistyped section reads as a mistake rather than
+        # as a count. Kept beside the rows rather than inside them: they are
+        # facts about the file, not about any one student.
+        report={"rows": report, "sections_created": sections_created,
+                "departments": sorted(touched_departments)},
     )
 
 
@@ -434,9 +633,7 @@ def build_template_workbook(department=None):
     wb = Workbook()
     ws = wb.active
     ws.title = "Students"
-    headers = ["Email", "Name", "Class Roll", "Exam Roll", "Batch",
-               "Subjects Enrolled", "Guardian Mobile", "Guardian Name",
-               "Guardian Email", "Mobile Number"]
+    headers = list(ROSTER_COLUMNS)
     ws.append(headers)
     head_fill = PatternFill("solid", fgColor="1F3B73")
     for col, _ in enumerate(headers, start=1):
@@ -448,14 +645,25 @@ def build_template_workbook(department=None):
     ws.freeze_panes = "A2"
 
     codes = "DSA, DBMS, AI"
+    dept_code = "CSE"
     if department is not None:
+        dept_code = department.code
         subs = list(Subject.objects.filter(department=department, is_active=True)[:3])
         if subs:
             codes = ", ".join(s.code for s in subs)
-    ws.append(["ananya@example.com", "Ananya Sharma", "01", "CSE22001", "2022-26", codes,
-               "+919812345670", "Mr. R. Sharma", "sharma@example.com", "9876543210"])
-    ws.append(["rahul@example.com", "Rahul Verma", "02", "CSE22002", "2022-26", codes,
-               "+919812345671", "Mrs. S. Verma", "", "9876500011"])
+    institute_name = department.institute.name if department is not None else ""
+    # Two sample rows, deliberately in different sections: one example of a
+    # column teaches the format, two teach that it varies per student. Both
+    # carry the department code, because that column is an instruction now —
+    # the file decides where each student goes, not a dropdown on the modal.
+    ws.append(["ananya@example.com", "Ananya Sharma", dept_code, "01", "CSE22001",
+               "2022-26", "A", codes,
+               "+919812345670", "Mr. R. Sharma", "sharma@example.com", "9876543210",
+               institute_name])
+    ws.append(["rahul@example.com", "Rahul Verma", dept_code, "02", "CSE22002",
+               "2022-26", "B", codes,
+               "+919812345671", "Mrs. S. Verma", "", "9876500011",
+               institute_name])
 
     notes = wb.create_sheet("Instructions")
     for line in [
@@ -463,14 +671,26 @@ def build_template_workbook(department=None):
         ["Email", "Always", "The key this sheet matches on. An email that already "
                             "exists updates that student instead of creating one."],
         ["Name", "New students", "Student's full name"],
+        ["Department", "New students", "Code or name, e.g. CSE or Computer "
+                                       "Science. One file can carry every "
+                                       "department in the institute — each row "
+                                       "says where its student belongs. Blank "
+                                       "on an existing student keeps theirs."],
         ["Class Roll", "New students", "Day-to-day roll inside the batch, e.g. 01"],
         ["Exam Roll", "No", "University / registration number, e.g. CSE22001"],
         ["Batch", "New students", "Format 2022-26 (created automatically if new)"],
+        ["Section", "No", "Which section of the batch, e.g. A. Created "
+                          "automatically if this batch has not used it before, "
+                          "so check the spelling — 'AA' makes a section called "
+                          "AA rather than an error. Leave blank for none."],
         ["Subjects Enrolled", "New students", "Comma separated subject codes or names"],
         ["Guardian Mobile", "New students", "WhatsApp number for low-attendance alerts"],
         ["Guardian Name", "No", ""],
         ["Guardian Email", "No", ""],
         ["Mobile Number", "No", "10-digit mobile"],
+        ["Institute", "No", "Checked, not applied. A student's institute follows "
+                            "from the department their row names; this column "
+                            "only catches a sheet uploaded to the wrong account."],
         ["", "", ""],
         ["UPDATING EXISTING STUDENTS", "", ""],
         ["Blank cell", "", "Leaves the stored value unchanged — so a sheet of just "
@@ -501,9 +721,7 @@ def build_roster_workbook(students):
     wb = Workbook()
     ws = wb.active
     ws.title = "Students"
-    headers = ["Email", "Name", "Class Roll", "Exam Roll", "Batch",
-               "Subjects Enrolled", "Guardian Mobile", "Guardian Name",
-               "Guardian Email", "Mobile Number", "Status"]
+    headers = ROSTER_COLUMNS + EXPORT_ONLY_COLUMNS
     ws.append(headers)
     fill = PatternFill("solid", fgColor="1F3B73")
     for col in range(1, len(headers) + 1):
@@ -518,14 +736,24 @@ def build_roster_workbook(students):
         ws.append([
             student.user.email,
             student.user.full_name,
+            # The code, not the name: it is what the template's sample rows
+            # show, it is shorter to retype, and both resolve on import anyway.
+            student.department.code,
             student.class_roll,
             student.exam_roll,
             student.batch.label,
+            # In the same slot the template puts it, so a round trip lines up
+            # cell for cell — the one list `ROSTER_COLUMNS` exists to guarantee.
+            student.section.name if student.section_id else "",
             ", ".join(e.subject.code for e in student.enrollments.all() if e.is_active),
             student.guardian_mobile,
             student.guardian_name,
             student.guardian_email,
             student.mobile or student.user.phone,
+            # Written out on export and checked-not-applied on import — see the
+            # note beside its header alias. Discipline used to sit beside it and
+            # is gone: it follows from the department, which the row now names.
+            student.department.institute.name,
             "Activated" if student.user.registration_completed else "Invited",
         ])
 

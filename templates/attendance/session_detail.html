@@ -21,7 +21,15 @@
           <span id="status-pill"></span>
         </div>
         <div class="row g-2 fs-13">
+          <!--
+            "Whole batch" spelled out rather than left blank: a session with no
+            section was for everybody in the cohort, which is a real answer.
+            See academics/allocation.py.
+          -->
           <div class="col-6"><div class="text-muted-2">Batch</div><div class="fw-600">{{ session.batch.label }}</div></div>
+          <div class="col-6"><div class="text-muted-2">Section</div><div class="fw-600">
+            {% if session.section %}{{ session.section.name }}{% else %}Whole batch{% endif %}</div></div>
+          <div class="col-6"><div class="text-muted-2">Semester</div><div class="fw-600">{{ session.subject.semester }}</div></div>
           <div class="col-6"><div class="text-muted-2">Teacher</div><div class="fw-600">{{ session.teacher.get_full_name }}</div></div>
           <div class="col-6"><div class="text-muted-2">Geo-fence</div><div class="fw-600">{{ session.radius_m }} m</div></div>
           <div class="col-6"><div class="text-muted-2">Expires</div><div class="fw-600" id="expires"></div></div>

@@ -13,6 +13,10 @@
       <input type="date" class="form-control form-control-sm" id="f-start" value="{{ default_start }}"></div>
     <div class="col-6 col-md-2"><label class="form-label mb-1">To</label>
       <input type="date" class="form-control form-control-sm" id="f-end" value="{{ default_end }}"></div>
+    {% if is_university %}
+    <div class="col-6 col-md-2"><label class="form-label mb-1">Institute</label>
+      {% include "partials/institute_filter.html" with id="f-institute" width="100%" %}</div>
+    {% endif %}
     <div class="col-6 col-md-2"><label class="form-label mb-1">Batch</label>
       <select class="form-select form-select-sm" id="f-batch"><option value="">All</option></select></div>
     <div class="col-6 col-md-2"><label class="form-label mb-1">Degree</label>
@@ -21,6 +25,17 @@
       <select class="form-select form-select-sm" id="f-subject-type">
         <option value="">All types</option>
         {% for t in subject_types %}<option value="{{ t.value }}">{{ t.label }}</option>{% endfor %}
+      </select></div>
+    <!--
+      The *subject's* semester — a session has none of its own. Filtered on the
+      server rather than in the browser, like every other control on this bar,
+      because the list is capped at 500 rows and narrowing client-side would
+      filter a page that had already been truncated.
+    -->
+    <div class="col-6 col-md-2"><label class="form-label mb-1">Semester</label>
+      <select class="form-select form-select-sm" id="f-semester">
+        <option value="">All semesters</option>
+        {% for i in semesters %}<option value="{{ i }}">Semester {{ i }}</option>{% endfor %}
       </select></div>
     <div class="col-6 col-md-3"><label class="form-label mb-1">Subject</label>
       <select class="form-select form-select-sm" id="f-subject"><option value="">All</option></select></div>
@@ -54,7 +69,16 @@ $(function(){
     { key:"subject", label:"Subject", render:(v,r)=>
       '<div><span class="ga-pill pill-violet">'+GA.esc(v)+'</span> <span class="fw-600">'+GA.esc(r.subject_name)+'</span></div>' },
     GA.degreeCol(),GA.subjectTypeCol(),
-    { key:"batch", label:"Batch" },
+    { key:"semester", label:"Sem", className:"text-center" },
+    GA.instituteCol(),{ key:"batch", label:"Batch" },
+    /*
+      An em dash, not a blank: a session with no section was for the *whole
+      batch*, which is a real answer. An empty cell reads as data that failed
+      to load. See academics/allocation.py.
+    */
+    { key:"section", label:"Section", className:"text-center", render:v=> v
+        ? '<span class="ga-pill pill-violet">'+GA.esc(v)+'</span>'
+        : '<span class="text-muted-2" title="The whole batch">—</span>' },
     { key:"teacher", label:"Teacher" },
     { key:"expected", label:"Enrolled", className:"text-center" },
     // What this session was actually set to. Shown rather than the current
@@ -79,7 +103,8 @@ $(function(){
     return GA.get("{% url 'attendance:api_sessions' %}", GA.query({
       start:$("#f-start").val(), end:$("#f-end").val(), batch:$("#f-batch").val(),
       subject:$("#f-subject").val(), subject_type:$("#f-subject-type").val(),
-      degree:$("#f-degree").val(), status:$("#f-status").val()
+      degree:$("#f-degree").val(), semester:$("#f-semester").val(),
+      status:$("#f-status").val()
     })).done(function(res){
       const rows = res.data.rows;
       $("#count-pill").text(rows.length+" sessions");
@@ -90,7 +115,7 @@ $(function(){
     });
   }
   $("#btn-apply").on("click", function(){ GA.spin(this, load()); });
-  $("#f-status, #f-batch, #f-subject").on("change", load);
+  $("#f-status, #f-batch, #f-subject, #f-semester").on("change", load);
   $("#f-subject-type, #f-degree").on("change", function(){
     GA.narrowSubjectSelect("#f-subject", $("#f-subject-type").val(),
                            $("#f-degree").val());

@@ -18,19 +18,44 @@
     <span class="input-group-text"><i class="fa-solid fa-magnifying-glass"></i></span>
     <input class="form-control" id="search" placeholder="Name, email, class or exam roll…">
   </div>
-  <select class="form-select form-select-sm {% if departments|length < 2 %}d-none{% endif %}"
+  <!--
+    Always shown. It used to hide itself below two departments, which read as
+    "the filter is missing" the moment an institute archived one — the count it
+    tested was of *live* departments, so closing a wing silently removed a
+    control. A one-option dropdown is harmless; an absent one is confusing.
+  -->
+  <select class="form-select form-select-sm"
           id="f-department" style="max-width:200px">
     <option value="">All departments</option>
-    {% for d in departments %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}
+    {% for d in filter_departments %}
+    <option value="{{ d.id }}">{{ d.name }}{% if not d.is_active %} (archived){% endif %}</option>
+    {% endfor %}
   </select>
   <select class="form-select form-select-sm" id="f-batch" style="max-width:200px"><option value="">All batches</option></select>
+  <!--
+    "Not in a section" is a real option rather than a gap in the list: it is the
+    question a head asks straight after an import, and without it those students
+    are only findable by reading every page.
+  -->
+  <select class="form-select form-select-sm" id="f-section" style="max-width:190px">
+    <option value="">All sections</option>
+    <option value="none">Not in a section</option>
+    {% for s in filter_sections %}
+    <option value="{{ s.id }}" data-batch="{{ s.batch_id }}">{{ s.batch.label }} · {{ s.name }}</option>
+    {% endfor %}
+  </select>
+  {% include "partials/institute_filter.html" with id="f-institute" %}
+  {% include "partials/discipline_filter.html" with id="f-discipline-filter" %}
   {% include "partials/subject_degree_filter.html" with id="f-degree" %}
   {% include "partials/subject_type_filter.html" with id="f-subject-type" %}
   <select class="form-select form-select-sm" id="f-subject" style="max-width:240px"><option value="">All subjects</option></select>
   <select class="form-select form-select-sm" id="f-status" style="max-width:170px">
-    <option value="">Any status</option><option value="active">Activated</option>
-    <option value="invited">Invited</option><option value="no-guardian">Missing guardian no.</option>
+    <option value="">Any status</option><option value="ACTIVE">Activated</option>
+    <option value="INVITED">Invited</option>
+    <option value="ARCHIVED">Archived</option>
+    <option value="no-guardian">Missing guardian no.</option>
     <option value="device-linked">Device linked</option>
+    <option value="revoked">Revoked discipline</option>
   </select>
   <div class="ms-auto d-flex gap-2">
     <span class="ga-pill pill-blue" id="count-pill">0 students</span>
@@ -53,7 +78,8 @@
       <div class="alert alert-light border fs-13 d-flex gap-3">
         <i class="fa-solid fa-circle-info text-primary mt-1"></i>
         <div>
-          <b>For new students:</b> <code>email</code>, <code>name</code>, <code>class roll</code>,
+          <b>For new students:</b> <code>email</code>, <code>name</code>,
+          <code>department</code> (code or name, e.g. CSE), <code>class roll</code>,
           <code>batch</code> (e.g. 2022-26), <code>subjects enrolled</code> (comma separated codes, e.g. DSA, DBMS, AI)
           and <code>guardian mobile</code> — the WhatsApp number that receives low-attendance alerts.
           <code>exam roll</code>, <code>mobile number</code>, <code>guardian name</code> and
@@ -74,18 +100,22 @@
         </div>
       </div>
 
+      <!--
+        No department dropdown. It is a column in the sheet now, so one file can
+        carry the whole college instead of one upload per department. The server
+        still narrows what a row may name to the departments this account
+        manages — see academics/views.api_students_import.
+      -->
       <form id="import-form">
         {% csrf_token %}
         <div class="row g-3 align-items-end">
-          {% if user.is_head %}
-          <div class="col-md-4"><label class="form-label">Department *</label>
-            <select class="form-select" name="department" required>
-              {% for d in departments %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}
-            </select></div>
-          {% endif %}
-          <div class="col-md-5"><label class="form-label">Spreadsheet (.xlsx / .csv) *</label>
-            <input type="file" class="form-control" name="file" accept=".xlsx,.xlsm,.csv" required></div>
-          <div class="col-md-3 d-flex gap-2">
+          <div class="col-md-8"><label class="form-label">Spreadsheet (.xlsx / .csv) *</label>
+            <input type="file" class="form-control" name="file" accept=".xlsx,.xlsm,.csv" required>
+            <div class="form-text">
+              Each row names its own department, so one file can cover every
+              department you manage.
+            </div></div>
+          <div class="col-md-4 d-flex gap-2">
             <button type="button" class="btn btn-light w-100" id="btn-preview"><i class="fa-solid fa-eye me-1"></i>Preview</button>
           </div>
         </div>
@@ -190,6 +220,33 @@
           <input class="form-control" name="exam_roll" placeholder="optional"></div>
         <div class="col-md-6 mb-0"><label class="form-label">Mobile</label><input class="form-control" name="mobile"></div>
         <div class="col-md-6 mb-0"><label class="form-label">Batch *</label><select class="form-select" name="batch_id" id="edit-batch"></select></div>
+        <!--
+          Narrowed to the chosen batch's own sections, and re-narrowed whenever
+          the batch changes. Section A of 2022-26 and section A of 2023-27 are
+          different groups of people; offering both would let a student be
+          filed under a cohort they are not in. The server refuses that anyway
+          (academics/sections.assert_in_batch) — this stops it being offered.
+
+          No "create" option here on purpose: a typo on a form should be
+          refused, not become a fourth section. Imports create sections, because
+          there a spreadsheet is the source of truth.
+        -->
+        <div class="col-md-6 mb-0"><label class="form-label">Section</label>
+          <select class="form-select" name="section_id" id="edit-section"></select>
+          <div class="form-text" id="edit-section-note"></div></div>
+        <!--
+          Both are derived, so both are shown and neither is posted. A student's
+          institute and discipline come from their department: they are facts
+          about where the student sits, not choices to be made row by row.
+          Making them editable here would let a student's discipline disagree
+          with their own department, which is a contradiction with no right
+          answer. To change either, move the student's department — or set the
+          department's discipline on the Departments screen.
+        -->
+        <div class="col-md-6 mb-0"><label class="form-label">Institute (from department)</label>
+          <input class="form-control" id="edit-institute" disabled></div>
+        <div class="col-md-6 mb-0"><label class="form-label">Discipline (from department)</label>
+          <input class="form-control" id="edit-discipline" disabled></div>
         <div class="col-12"><hr class="my-1"><div class="fs-12 fw-600 text-muted-2">GUARDIAN</div></div>
         <div class="col-md-6 mb-0">
           <label class="form-label">Guardian mobile (WhatsApp) *</label>
@@ -226,6 +283,8 @@ $(function(){
   const SCOPE = {% if wide %}{scope:"all"}{% else %}{}{% endif %};
 
   const cols = [
+    GA.instituteCol(null, {always:true}),
+    GA.disciplineCol(),
     { key:"name", label:"Student", render:(v,r)=>
       '<div class="d-flex align-items-center gap-2">'+GA.avatar(v)+
       '<div><div class="fw-600">'+GA.esc(v)+'</div><small class="text-muted-2">'+GA.esc(r.email)+'</small></div></div>' },
@@ -236,6 +295,13 @@ $(function(){
         : '<span class="text-muted-2">—</span>' },
     { key:"department", label:"Department", render:v=> GA.esc(v||"—") },
     { key:"batch", label:"Batch", render:v=>'<span class="ga-pill pill-blue">'+GA.esc(v)+'</span>' },
+    /*
+      An em dash rather than an empty cell: "no section" is a state a college
+      may keep for years, and a blank reads as data that failed to load.
+    */
+    { key:"section", label:"Section", className:"text-center", render:v=> v
+        ? '<span class="ga-pill pill-violet">'+GA.esc(v)+'</span>'
+        : '<span class="text-muted-2">—</span>' },
     { key:"mobile", label:"Mobile", render:(v,r)=>GA.phone(r.mobile_dial) },
     { key:"guardian_mobile", label:"Guardian (WhatsApp)", render:(v,r)=> v
         ? '<div>'+GA.phone(r.guardian_dial)+
@@ -243,7 +309,8 @@ $(function(){
         : '<span class="ga-pill pill-amber"><i class="fa-solid fa-triangle-exclamation"></i>missing</span>' },
     { key:"subjects", label:"Subjects", sortable:false, render:v=>
       (v||[]).map(c=>'<span class="ga-chip">'+GA.esc(c)+'</span>').join("") || '<span class="text-muted-2">—</span>' },
-    { key:"status", label:"Status", render:v=>GA.statusPill(v) },
+    /* Shared cell: Revoked leads, status follows. See GA.statusCol. */
+    GA.statusCol(),
     { key:"device_bound", label:"Device", render:(v,r)=> v
         ? '<span class="ga-pill pill-blue" title="Bound '+GA.esc(r.device_bound_at)+
           '"><i class="fa-solid fa-mobile-screen"></i>Linked</span>'
@@ -273,8 +340,10 @@ $(function(){
 
   function applyFilters(){
     const d=$("#f-department").val(), b=$("#f-batch").val(),
+          sec=$("#f-section").val(),
           s=$("#f-subject").val(), st=$("#f-status").val(),
-          kind=$("#f-subject-type").val(), deg=$("#f-degree").val();
+          kind=$("#f-subject-type").val(), deg=$("#f-degree").val(),
+          disc=$("#f-discipline-filter").val();
     {% if wide %}
     const code = s || null;                  // options are codes on this screen
     {% else %}
@@ -282,9 +351,21 @@ $(function(){
     {% endif %}
     const view = rows.filter(r =>
       (!d || r.department_id == d) &&
+      (!disc || r.discipline === disc) &&
       (!b || r.batch_id == b) &&
+      /* "none" is an answer, not an absent filter — see the note on the control. */
+      (!sec || (sec === "none" ? !r.section_id : r.section_id == sec)) &&
+      /*
+        Revoked is a different axis, so it reads a different field — see
+        core/enums.py. Every other option is the row's own status.
+      */
+      /*
+        Revoked is a different axis, so it reads a different field — see
+        core/enums.py. Every other option reads the row's own status.
+      */
       (!st || (st === "no-guardian" ? !r.guardian_mobile
               : st === "device-linked" ? r.device_bound
+              : st === "revoked" ? r.revoked
               : r.status === st)) &&
       // "Students taking at least one subject of this type" — a student has no
       // type of their own, and this is the same reading the reports use.
@@ -310,6 +391,9 @@ $(function(){
       $('#edit-form [name=guardian_name]').val(r.guardian_name);
       $('#edit-form [name=guardian_email]').val(r.guardian_email);
       $("#edit-batch").html(lookups.batches.map(b=>'<option value="'+b.id+'">'+GA.esc(b.label)+'</option>').join("")).val(r.batch_id);
+      fillSections(r.batch_id, r.section_id);
+      $("#edit-institute").val(r.institute || "—");
+      $("#edit-discipline").val(r.discipline_label || "Not tied to one");
       $("#edit-subjects").html(lookups.subjects.map(s=>
         '<div class="form-check"><input class="form-check-input" type="checkbox" name="subjects[]" value="'+s.id+
         '" id="es'+s.id+'"'+((r.subjects||[]).indexOf(s.code)>-1?' checked':'')+
@@ -388,12 +472,40 @@ $(function(){
     GA.narrowSubjectSelect("#f-subject", $("#f-subject-type").val(),
                            $("#f-degree").val());
   });
-  $("#f-department, #f-batch, #f-subject, #f-subject-type, #f-degree, #f-status").on("change", function(){
+  $("#f-department, #f-batch, #f-section, #f-subject, #f-subject-type, #f-degree, #f-status, #f-discipline-filter").on("change", function(){
     applyFilters();
+    // The export carries the same filters as the table, so what is downloaded
+    // is what is on screen.
     $("#btn-export").attr("href", "{% url 'academics:api_students_export' %}?" +
       {% if wide %}"scope=all&" +{% endif %}
-      $.param(GA.query({batch:$("#f-batch").val(), subject:$("#f-subject").val()})));
+      $.param(GA.query({batch:$("#f-batch").val(), section:$("#f-section").val(),
+                        subject:$("#f-subject").val()})));
   });
+
+  /*
+    The sections of one batch, read off the filter dropdown the server already
+    rendered — each option carries its batch id. One source for both controls,
+    so the edit modal cannot offer a section the filter has never heard of.
+  */
+  function fillSections(batchId, selected){
+    const opts = $("#f-section option[data-batch]").filter(function(){
+      return String($(this).attr("data-batch")) === String(batchId);
+    });
+    $("#edit-section").html(
+      '<option value="">No section</option>' +
+      opts.map(function(){
+        // The filter labels options "2022-26 · A"; inside one batch the batch
+        // half is noise, so only the section name is kept.
+        const name = $(this).text().split("·").pop().trim();
+        return '<option value="'+$(this).val()+'">'+GA.esc(name)+'</option>';
+      }).get().join("")
+    ).val(selected || "");
+    $("#edit-section-note").text(opts.length
+      ? "Sections of this batch. Changing the batch changes this list."
+      : "This batch has no sections yet — import a roster with a Section "
+        + "column to create them.");
+  }
+  $("#edit-batch").on("change", function(){ fillSections($(this).val(), ""); });
 
   $("#edit-form").on("submit", function(e){
     e.preventDefault();
@@ -417,6 +529,23 @@ $(function(){
       { key:"email", label:"Email" },
       { key:"name", label:"Name" },
       { key:"batch", label:"Batch" },
+      /* Shown in the preview so a section created by a typo is visible before
+         anything is saved, not discovered in the filter afterwards. */
+      { key:"section", label:"Section", className:"text-center",
+        render:v=> v ? GA.esc(v) : '<span class="text-muted-2">—</span>' },
+      /*
+        The department a row actually landed in — resolved, not echoed. "CSE"
+        in the sheet showing as "Computer Science (CSE)" here is the column
+        working; confirming that is the whole reason to show it in a preview.
+
+        Institute is still echoed and still only checked. Discipline is gone
+        from both the sheet and this table: it follows from the department,
+        which each row now names, so there was nothing left for it to catch.
+      */
+      { key:"department", label:"Department", render:v=> v ? GA.esc(v)
+          : '<span class="ga-pill pill-amber">missing</span>' },
+      { key:"institute", label:"Institute", render:v=> v ? GA.esc(v)
+          : '<span class="text-muted-2">—</span>' },
       { key:"guardian_mobile", label:"Guardian", render:v=> v ? GA.esc(v) : '<span class="text-muted-2">—</span>' },
       { key:"subjects", label:"Subjects", sortable:false, render:v=>(v||[]).map(c=>'<span class="ga-chip">'+GA.esc(c)+'</span>').join("") },
       { key:"status", label:"Result", render:v=>GA.statusPill(v) },
@@ -478,6 +607,12 @@ $(function(){
       GA.table("#history-table",{ perPage:8, rows:res.data.rows, columns:[
         { key:"created_at", label:"When" },
         { key:"file_name", label:"File" },
+        /*
+          The departments the file reached, plural — one upload can now span
+          the whole college. Older jobs, from when it was a dropdown, carry a
+          single department and show that instead.
+        */
+        { key:"department", label:"Departments" },
         { key:"uploaded_by", label:"By" },
         { key:"total", label:"Rows", className:"text-center" },
         { key:"created", label:"New", className:"text-center" },
